@@ -1,0 +1,8 @@
+Mina keeps a notebook on a square table in a small workshop. The first line she writes is her own: a model can only repeat patterns it has actually seen.
+In the morning she slices bread, pours tea, and opens the window. Cold air moves the page. She writes that the kettle clicks when the water boils.
+Her brother Adel repairs a loose chair. He counts the screws out loud: one, two, three, four. Mina copies the count into the notebook because she heard it in the room.
+They walk to the garden after lunch. The garden has beans, mint, and a crooked fig tree. Adel ties the fig branch with cloth. Mina writes: the cloth is blue, the branch is thin, the soil is damp.
+A neighbor asks where the text came from. Mina says it came from this yard and this table, not from a book she does not own. She will not paste someone else's story into the file.
+At night the lamp is dim. The cat sleeps beside the chair. Rain ticks on the roof. Mina adds one more line: training on a short note can memorize the note, and that is not the same as knowing the world.
+The next day they describe the market. Red apples. A heavy bag. A bus that arrives late. Adel says the bus door sticks, and Mina writes the sentence as he said it.
+This file is a seed for a local experiment. It is short on purpose. Add much more text you have the right to use before expecting the model to sound fluent.

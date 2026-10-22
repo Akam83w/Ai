@@ -1,0 +1,3 @@
+# PyTorch is the only runtime dependency.
+# A CUDA build is optional. For a CPU-only install see README.md.
+torch>=2.2.0
