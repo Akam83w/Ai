@@ -43,6 +43,17 @@ python train.py --data data/corpus --preset tiny --steps 200 --val-ratio 0.5 --o
 python generate.py --checkpoint checkpoints/tiny.pt --prompt "في ورشة" --max-new-tokens 80
 ```
 
+### تشغيل واجهة المحادثة المحلية
+
+بعد تثبيت PyTorch وتدريب النموذج، افتح طرفيتين من مجلد المشروع:
+
+1. شغّل خادم التوليد المحلي: `python server.py`
+2. في الطرفية الثانية: `npm install && npm run dev`
+3. افتح `http://127.0.0.1:8080`.
+
+إذا لم يوجد `checkpoints/tiny.pt`، درّب أولاً بالأمر أعلاه. تفاصيل الربط وحدوده في [WEB.md](WEB.md). واجهة المحادثة تجربة أولية؛ النموذج لا يتبع التعليمات بالضرورة ولا يستخدم سجل المحادثة كسياق.
+
+
 ## هيكل الملفات
 
 ```text
