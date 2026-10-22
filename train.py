@@ -3,6 +3,24 @@
 
 No network access. The optimizer, step, config, and tokenizer are stored
 beside the weights so training can continue later on the same machine.
+
+Metrics
+-------
+train_loss
+    Mean cross-entropy over the training batches in the current log window
+    (or the single step being logged). Measures fit to training documents only.
+
+val_loss
+    Mean cross-entropy over up to --val-batches from the validation loader.
+    Validation documents never appear in the training loader (document-level
+    split). A falling train_loss with a rising val_loss is a sign of
+    memorization, not generalization. With only the seed corpus, val_loss is
+    usually empty or too noisy to interpret.
+
+val_ppl
+    exp(min(val_loss, 20)). Bounded so extreme loss does not overflow.
+    Not comparable to commercial model perplexities (different tokenization
+    and data scale).
 """
 
 from __future__ import annotations
@@ -15,7 +33,13 @@ from pathlib import Path
 import torch
 from torch.utils.data import DataLoader
 
-from dataset import CausalWindowDataset, encode_documents, load_text_files, split_documents
+from dataset import (
+    CausalWindowDataset,
+    describe_split,
+    encode_documents,
+    load_text_files,
+    split_documents,
+)
 from model import PRESETS, ModelConfig, TinyLM, config_from_preset
 from tokenizer import CharTokenizer
 
@@ -56,9 +80,12 @@ def build_loader(
     )
 
 
-def evaluate(model: TinyLM, loader: DataLoader, device: torch.device, max_batches: int) -> float:
+def evaluate(
+    model: TinyLM, loader: DataLoader, device: torch.device, max_batches: int
+) -> tuple[float, int]:
+    """Return (mean_loss, n_batches). mean_loss is nan if no batches ran."""
     model.eval()
-    losses = []
+    losses: list[float] = []
     with torch.no_grad():
         for i, (inputs, targets) in enumerate(loader):
             if i >= max_batches:
@@ -67,8 +94,8 @@ def evaluate(model: TinyLM, loader: DataLoader, device: torch.device, max_batche
             losses.append(float(loss.item()))
     model.train()
     if not losses:
-        return float("nan")
-    return sum(losses) / len(losses)
+        return float("nan"), 0
+    return sum(losses) / len(losses), len(losses)
 
 
 def train(args: argparse.Namespace) -> dict:
@@ -94,6 +121,7 @@ def train(args: argparse.Namespace) -> dict:
         raise ValueError(f"--seq-len {args.seq_len} is above the model max_seq_len {cfg.max_seq_len}")
 
     train_docs, val_docs = split_documents(documents, args.val_ratio, args.seed)
+    split_info = describe_split(train_docs, val_docs)
     train_ids = encode_documents(tokenizer, train_docs)
     unk = sum(1 for token in train_ids if token == tokenizer.unk_id)
     usable = len(train_ids)
@@ -110,6 +138,11 @@ def train(args: argparse.Namespace) -> dict:
         val_ids = encode_documents(tokenizer, val_docs)
         if len(val_ids) >= seq_len + 1:
             val_loader = build_loader(val_ids, seq_len, args.stride, args.batch_size, args.seed + 1)
+        else:
+            print(
+                f"warning: validation has {len(val_ids)} tokens; "
+                f"need at least {seq_len + 1} for val_loss — skipping val"
+            )
 
     model = TinyLM(cfg).to(device)
     optimizer = torch.optim.AdamW(
@@ -129,9 +162,12 @@ def train(args: argparse.Namespace) -> dict:
     print(
         f"device={device} preset={args.preset if not args.resume else 'from-checkpoint'} "
         f"params={model.parameter_count():,} vocab={tokenizer.vocab_size} "
-        f"docs={len(train_docs)} tokens={len(train_ids):,} seq_len={seq_len} "
+        f"train_docs={split_info['train_docs']} val_docs={split_info['val_docs']} "
+        f"train_tokens={len(train_ids):,} seq_len={seq_len} "
         f"unk_tokens={unk} start_step={start_step}"
     )
+    if split_info["val_names"]:
+        print(f"val files: {', '.join(split_info['val_names'])}")
     if unk:
         print("warning: some characters are outside the checkpoint vocabulary and became <unk>")
 
@@ -142,6 +178,7 @@ def train(args: argparse.Namespace) -> dict:
     last_loss = float("nan")
     steps_to_run = args.steps
     end_step = start_step + steps_to_run
+    last_val_loss = float("nan")
 
     for step in range(start_step + 1, end_step + 1):
         inputs, targets = next(batches)
@@ -158,27 +195,32 @@ def train(args: argparse.Namespace) -> dict:
             done = step - start_step
             message = f"step {step} train_loss {running / max(done, 1):.4f}"
             if val_loader is not None and (step % args.log_every == 0 or step == end_step):
-                val_loss = evaluate(model, val_loader, device, args.val_batches)
-                ppl = math.exp(min(val_loss, 20))
-                message += f" val_loss {val_loss:.4f} val_ppl {ppl:.2f}"
+                val_loss, n_val = evaluate(model, val_loader, device, args.val_batches)
+                last_val_loss = val_loss
+                if n_val:
+                    ppl = math.exp(min(val_loss, 20))
+                    message += f" val_loss {val_loss:.4f} val_ppl {ppl:.2f} (batches={n_val})"
             message += f" steps/s {done / elapsed:.2f}"
             print(message)
 
         if args.save_every and step % args.save_every == 0:
-            payload = checkpoint_payload(model, optimizer, tokenizer, step, last_loss)
+            payload = checkpoint_payload(model, optimizer, tokenizer, step, last_loss, last_val_loss)
             save_checkpoint(Path(args.out), payload)
 
-    payload = checkpoint_payload(model, optimizer, tokenizer, end_step, last_loss)
+    payload = checkpoint_payload(model, optimizer, tokenizer, end_step, last_loss, last_val_loss)
     save_checkpoint(Path(args.out), payload)
     print(f"saved {args.out}")
     return payload
 
 
-def checkpoint_payload(model, optimizer, tokenizer: CharTokenizer, step: int, loss: float) -> dict:
+def checkpoint_payload(
+    model, optimizer, tokenizer: CharTokenizer, step: int, loss: float, val_loss: float = float("nan")
+) -> dict:
     return {
         "format": CHECKPOINT_FORMAT,
         "step": step,
         "loss": loss,
+        "val_loss": val_loss,
         "config": model.cfg.to_dict(),
         "tokenizer": tokenizer.to_dict(),
         "model": model.state_dict(),
@@ -201,7 +243,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--resume", default="", help="checkpoint to continue from")
     parser.add_argument("--log-every", type=int, default=20)
     parser.add_argument("--save-every", type=int, default=100)
-    parser.add_argument("--val-ratio", type=float, default=0.0)
+    parser.add_argument(
+        "--val-ratio",
+        type=float,
+        default=0.0,
+        help="fraction of *documents* held out for validation (0 disables; needs >=2 files)",
+    )
     parser.add_argument("--val-batches", type=int, default=5)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--device", default="auto", help="auto, cpu, or cuda")
