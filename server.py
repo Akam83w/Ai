@@ -114,8 +114,7 @@ class OwnedLMHandler(BaseHTTPRequestHandler):
                     seed=None,
                     device="cpu",
                     stop_at_eos=True,
-                )
-            ,
+                ),
                 include_prompt=False,
             )
         except Exception as exc:
