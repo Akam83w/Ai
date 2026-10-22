@@ -1,3 +1,4 @@
+checkpoints/
 node_modules/
 .project_id
 .github_repo
@@ -16,3 +17,4 @@ checkpoints/
 .DS_Store
 data/private/*
 !data/private/.gitkeep
+samples/

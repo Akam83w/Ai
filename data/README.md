@@ -6,3 +6,14 @@
 - `private/`: مكان مقترح لبيانات لا تريد رفعها إلى Git.
 - الترميز المطلوب: UTF-8.
 - التفاصيل والسجل: [SOURCES.md](SOURCES.md).
+- دليل إضافة مجموعة خارجية: [ADDING_DATA.md](ADDING_DATA.md).
+
+## التقسيم إلى تدريب وتحقق
+
+```bash
+python train.py --data data/corpus --val-ratio 0.2 --val-batches 5 ...
+```
+
+التقسيم **حسب الملف كاملاً** (انظر `split_documents` في `dataset.py`). لا تُشارك نوافذ محارف من نفس الملف بين التدريب والتحقق. مع ملف واحد فقط يبقى التحقق فارغاً.
+
+معاني المقاييس وحدودها: [../METRICS.md](../METRICS.md).
