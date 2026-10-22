@@ -115,6 +115,8 @@ class OwnedLMHandler(BaseHTTPRequestHandler):
                     device="cpu",
                     stop_at_eos=True,
                 )
+            ,
+                include_prompt=False,
             )
         except Exception as exc:
             # Details remain in the local terminal; do not leak tracebacks to the browser.
@@ -122,7 +124,7 @@ class OwnedLMHandler(BaseHTTPRequestHandler):
             self._send_json(500, {"error": "تعذّر توليد النص. راجع سجل خادم Python."})
             return
 
-        continuation = generated[len(prompt):] if generated.startswith(prompt) else generated
+        continuation = generated
         self._send_json(
             200,
             {
