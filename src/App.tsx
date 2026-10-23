@@ -12,19 +12,12 @@ const TRAIN_COMMAND =
   "python train.py --data data/corpus --preset tiny --steps 200 --val-ratio 0.5 --out checkpoints/tiny.pt";
 
 export default function App() {
-  const [messages, setMessages] = useState<Message[]>([
-    {
-      id: 1,
-      role: "assistant",
-      content:
-        "هلا بيك! أني واجهة تجربة لنموذج OwnedLM المحلي. اكتب نصاً وشوف شنو يكمّل النموذج بعد التدريب. تذكّر: هذا نموذج حرفي صغير وتجريبي، مو بمستوى ChatGPT.",
-    },
-  ]);
+  const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<ApiStatus>("checking");
   const [statusMessage, setStatusMessage] = useState("أتحقق من خادم النموذج...");
-  const [nextId, setNextId] = useState(2);
+  const [nextId, setNextId] = useState(1);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
