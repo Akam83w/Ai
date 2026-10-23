@@ -12,6 +12,7 @@ ENV PYTHONUNBUFFERED=1 HOST=0.0.0.0 PORT=8080
 WORKDIR /app
 COPY --from=web-build /app/dist ./dist
 COPY . .
-RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
+RUN pip install --no-cache-dir "numpy>=1.26,<3" --index-url https://pypi.org/simple \
+    && pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
 EXPOSE 8080
 CMD ["python", "server.py"]
