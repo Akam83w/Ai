@@ -1,8 +1,8 @@
 # Build the React/Vite interface.
 FROM node:22-alpine AS web-build
 WORKDIR /app
-COPY package.json package-lock.json ./
-RUN npm ci
+COPY package.json ./
+RUN npm install --no-package-lock
 COPY . .
 RUN npm run build
 
