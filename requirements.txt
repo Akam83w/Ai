@@ -1,3 +1,4 @@
-# PyTorch is the only runtime dependency.
-# A CUDA build is optional. For a CPU-only install see README.md.
+# PyTorch is the runtime dependency.
+# NumPy is required by PyTorch utilities used during inference.
+numpy>=1.26,<3
 torch>=2.2.0

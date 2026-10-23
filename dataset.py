@@ -1,5 +1,13 @@
 # SPDX-License-Identifier: MIT
-"""Read local .txt files and slice them into causal language-model windows."""
+"""Read local .txt files and slice them into causal language-model windows.
+
+Train/validation split is **by whole document** so no character from a
+validation file appears in training windows. That avoids the common leak
+where overlapping character windows from the same paragraph sit in both sets.
+
+With fewer than two documents, validation is empty: a single file cannot be
+split without either leaking windows or inventing artificial cut points.
+"""
 
 from __future__ import annotations
 
@@ -33,8 +41,16 @@ def load_text_files(directory: str | Path) -> list[tuple[str, str]]:
 def split_documents(
     documents: list[tuple[str, str]], val_ratio: float, seed: int
 ) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
+    """Split **whole documents** into train and validation sets.
+
+    - No document name appears in both lists.
+    - With 0 or 1 document, or val_ratio <= 0, validation is empty.
+    - At least one document always remains in train when a split is made.
+    """
     if val_ratio <= 0 or len(documents) < 2:
-        return documents, []
+        return list(documents), []
+    if val_ratio >= 1.0:
+        raise ValueError("val_ratio must be in (0, 1); use 0 to disable validation")
     order = list(range(len(documents)))
     random.Random(seed).shuffle(order)
     n_val = max(1, int(round(len(documents) * val_ratio)))
@@ -44,6 +60,22 @@ def split_documents(
     for i, doc in enumerate(documents):
         (val if i in val_idx else train).append(doc)
     return train, val
+
+
+def describe_split(
+    train_docs: list[tuple[str, str]], val_docs: list[tuple[str, str]]
+) -> dict:
+    """Return counts useful for logs and tests (no text content)."""
+    train_chars = sum(len(text) for _name, text in train_docs)
+    val_chars = sum(len(text) for _name, text in val_docs)
+    return {
+        "train_docs": len(train_docs),
+        "val_docs": len(val_docs),
+        "train_chars": train_chars,
+        "val_chars": val_chars,
+        "train_names": [name for name, _text in train_docs],
+        "val_names": [name for name, _text in val_docs],
+    }
 
 
 def encode_documents(tokenizer: CharTokenizer, documents: list[tuple[str, str]]) -> list[int]:

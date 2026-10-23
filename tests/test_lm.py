@@ -1,8 +1,13 @@
 # SPDX-License-Identifier: MIT
-"""Create the model, train it for a few steps, resume, and sample text."""
+"""Create the model, train it for a few steps, resume, and sample text.
+
+Also checks document-level train/val split (no leakage) and that train_loss
+and val_loss are computed from different loaders.
+"""
 
 from __future__ import annotations
 
+import math
 import sys
 import tempfile
 import unittest
@@ -15,11 +20,18 @@ from torch.utils.data import DataLoader
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from dataset import CausalWindowDataset, load_text_files  # noqa: E402
+from dataset import (  # noqa: E402
+    CausalWindowDataset,
+    describe_split,
+    encode_documents,
+    load_text_files,
+    split_documents,
+)
+from eval_samples import DEFAULT_PROMPTS, sample_prompt  # noqa: E402
 from generate import generate  # noqa: E402
 from model import ModelConfig, TinyLM  # noqa: E402
 from tokenizer import CharTokenizer  # noqa: E402
-from train import train  # noqa: E402
+from train import evaluate, train  # noqa: E402
 
 BANNED_IMPORTS = (
     "openai",
@@ -107,6 +119,69 @@ class ModelTests(unittest.TestCase):
                 self.assertNotIn(f"from {name}", source)
 
 
+class SplitAndMetricsTests(unittest.TestCase):
+    def test_document_split_no_leakage(self) -> None:
+        docs = [(f"f{i}.txt", f"content-{i}-" * 20) for i in range(5)]
+        train, val = split_documents(docs, val_ratio=0.4, seed=7)
+        train_names = {n for n, _ in train}
+        val_names = {n for n, _ in val}
+        self.assertTrue(train_names)
+        self.assertTrue(val_names)
+        self.assertEqual(train_names & val_names, set())
+        self.assertEqual(train_names | val_names, {n for n, _ in docs})
+        info = describe_split(train, val)
+        self.assertEqual(info["train_docs"], len(train))
+        self.assertEqual(info["val_docs"], len(val))
+
+    def test_single_document_yields_empty_val(self) -> None:
+        docs = [("only.txt", "نص قصير " * 50)]
+        train, val = split_documents(docs, val_ratio=0.5, seed=1)
+        self.assertEqual(len(train), 1)
+        self.assertEqual(val, [])
+
+    def test_train_and_val_loss_use_disjoint_docs(self) -> None:
+        """Train loss on train docs; val loss on val docs — separate loaders."""
+        torch.manual_seed(3)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "a.txt").write_text(("ألفا " * 80) + "\n", encoding="utf-8")
+            (root / "b.txt").write_text(("بيتا " * 80) + "\n", encoding="utf-8")
+            documents = load_text_files(root)
+            train_docs, val_docs = split_documents(documents, val_ratio=0.5, seed=0)
+            self.assertEqual(len(train_docs), 1)
+            self.assertEqual(len(val_docs), 1)
+            self.assertNotEqual(train_docs[0][0], val_docs[0][0])
+
+            tokenizer = CharTokenizer.from_texts([t for _, t in documents])
+            train_ids = encode_documents(tokenizer, train_docs)
+            val_ids = encode_documents(tokenizer, val_docs)
+            seq_len = 16
+            train_ds = CausalWindowDataset(train_ids, seq_len=seq_len, stride=8)
+            val_ds = CausalWindowDataset(val_ids, seq_len=seq_len, stride=8)
+            train_loader = DataLoader(train_ds, batch_size=4, shuffle=False)
+            val_loader = DataLoader(val_ds, batch_size=4, shuffle=False)
+
+            cfg = ModelConfig(
+                vocab_size=tokenizer.vocab_size,
+                d_model=32,
+                n_layers=1,
+                n_heads=4,
+                d_ff=64,
+                max_seq_len=32,
+                dropout=0.0,
+                pad_id=tokenizer.pad_id,
+            )
+            model = TinyLM(cfg)
+            train_loss, n_train = evaluate(model, train_loader, torch.device("cpu"), max_batches=10)
+            val_loss, n_val = evaluate(model, val_loader, torch.device("cpu"), max_batches=10)
+            self.assertGreater(n_train, 0)
+            self.assertGreater(n_val, 0)
+            self.assertTrue(math_isfinite(train_loss))
+            self.assertTrue(math_isfinite(val_loss))
+            self.assertIsInstance(train_loss, float)
+            self.assertIsInstance(val_loss, float)
+
+
 class TrainGenerateTests(unittest.TestCase):
     def test_train_resume_and_generate(self) -> None:
         torch.manual_seed(2)
@@ -143,6 +218,54 @@ class TrainGenerateTests(unittest.TestCase):
             self.assertIsInstance(text, str)
             self.assertGreater(len(text), 0)
             self.assertNotIn("<bos>", text)
+
+    def test_train_with_val_ratio_logs_val_loss(self) -> None:
+        torch.manual_seed(4)
+        with tempfile.TemporaryDirectory() as tmp:
+            data = Path(tmp) / "corpus"
+            data.mkdir()
+            (data / "one.txt").write_text("واحد " * 100, encoding="utf-8")
+            (data / "two.txt").write_text("اثنان " * 100, encoding="utf-8")
+            out = Path(tmp) / "model.pt"
+            args = _args(data, out, steps=4)
+            args.val_ratio = 0.5
+            args.val_batches = 2
+            args.log_every = 2
+            payload = train(args)
+            self.assertIn("val_loss", payload)
+            self.assertTrue(
+                math_isfinite(payload["val_loss"]) or math.isnan(payload["val_loss"])
+            )
+
+    def test_fixed_prompts_produce_snapshot_text(self) -> None:
+        torch.manual_seed(5)
+        text = "في ورشة صغيرة قال سامي هطل المطر الخبز يحتاج القطة. " * 20
+        tokenizer = CharTokenizer.from_texts([text])
+        cfg = ModelConfig(
+            vocab_size=tokenizer.vocab_size,
+            d_model=32,
+            n_layers=1,
+            n_heads=4,
+            d_ff=64,
+            max_seq_len=32,
+            dropout=0.0,
+            pad_id=tokenizer.pad_id,
+        )
+        model = TinyLM(cfg).eval()
+        self.assertGreaterEqual(len(DEFAULT_PROMPTS), 3)
+        for i, prompt in enumerate(DEFAULT_PROMPTS[:3]):
+            out = sample_prompt(
+                model,
+                tokenizer,
+                prompt,
+                max_new_tokens=12,
+                temperature=0.8,
+                top_k=10,
+                device=torch.device("cpu"),
+                seed=10 + i,
+            )
+            self.assertIsInstance(out, str)
+            self.assertGreater(len(out), 0)
 
     def test_missing_corpus_raises(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

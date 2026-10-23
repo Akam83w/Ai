@@ -4,7 +4,6 @@
 This process does not contact a model provider. It only reads the checkpoint
 you trained and prints characters.
 """
-
 from __future__ import annotations
 
 import argparse
@@ -15,7 +14,8 @@ from model import ModelConfig, TinyLM
 from tokenizer import CharTokenizer
 
 
-def generate(args: argparse.Namespace) -> str:
+def generate(args: argparse.Namespace, include_prompt: bool = True) -> str:
+    """Generate text locally; optionally return only tokens generated after the prompt."""
     if args.seed is not None:
         torch.manual_seed(args.seed)
     device = torch.device(args.device)
@@ -29,6 +29,7 @@ def generate(args: argparse.Namespace) -> str:
     ids = tokenizer.encode(args.prompt, add_bos=True)
     if not ids:
         ids = [tokenizer.bos_id]
+    prompt_token_count = len(ids)
     idx = torch.tensor([ids], dtype=torch.long, device=device)
     top_k = None if args.top_k <= 0 else args.top_k
     out = model.generate(
@@ -38,7 +39,10 @@ def generate(args: argparse.Namespace) -> str:
         top_k=top_k,
         eos_id=tokenizer.eos_id if args.stop_at_eos else None,
     )
-    return tokenizer.decode(out[0].tolist())
+    output_ids = out[0].tolist()
+    if not include_prompt:
+        output_ids = output_ids[prompt_token_count:]
+    return tokenizer.decode(output_ids)
 
 
 def build_parser() -> argparse.ArgumentParser:
