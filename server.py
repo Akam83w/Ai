@@ -25,7 +25,7 @@ HOST = os.environ.get("HOST", "0.0.0.0")
 PORT = int(os.environ.get("PORT", "8080"))
 MAX_BODY_BYTES = 16_384
 MAX_PROMPT_CHARS = 2_000
-MAX_NEW_TOKENS = 120
+MAX_NEW_TOKENS = 40
 BOOTSTRAP_ERROR = ""
 
 
@@ -130,18 +130,21 @@ class OwnedLMHandler(BaseHTTPRequestHandler):
             )
             return
         try:
-            max_new_tokens = int(payload.get("max_new_tokens", 80))
+            max_new_tokens = int(payload.get("max_new_tokens", 32))
         except (TypeError, ValueError):
-            max_new_tokens = 80
+            max_new_tokens = 32
         max_new_tokens = max(1, min(max_new_tokens, MAX_NEW_TOKENS))
         try:
+            # Limit CPU thread fan-out on small shared hosting instances.
+            # This model is tiny; excessive PyTorch threads can make it slower.
+            torch.set_num_threads(max(1, min(2, os.cpu_count() or 1)))
             generated = generate(
                 SimpleNamespace(
                     checkpoint=str(CHECKPOINT),
                     prompt=prompt,
                     max_new_tokens=max_new_tokens,
                     temperature=0.8,
-                    top_k=30,
+                    top_k=20,
                     seed=None,
                     device="cpu",
                     stop_at_eos=True,
