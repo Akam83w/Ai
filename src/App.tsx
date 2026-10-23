@@ -133,7 +133,7 @@ export default function App() {
           <p className="small-note">النصوص الحالية قليلة؛ التدريب لا يضمن إجابات مفهومة.</p>
         </section>
 
-        <div className="sidebar-footer">نسخة تجريبية · لا تعتمد على المخرجات كمعلومات مؤكدة</div>
+        <div className="sidebar-footer">نسخة تجريبية · لا تعتمد على المخرجات كمعلومات مؤكدة<br /><span>تطوير: ذنون</span></div>
       </aside>
 
       <section className="chat-panel" aria-label="محادثة النموذج">
