@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import mimetypes
 import os
+import subprocess
+import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
@@ -154,7 +156,36 @@ class OwnedLMHandler(BaseHTTPRequestHandler):
         )
 
 
+def _ensure_checkpoint() -> None:
+    """Create a tiny local checkpoint when deployment did not include one."""
+    if CHECKPOINT.is_file() and CHECKPOINT.stat().st_size > 0:
+        return
+
+    print("[OwnedLM] No usable checkpoint found; training a tiny bootstrap model.")
+    command = [
+        sys.executable,
+        str(ROOT / "train.py"),
+        "--data", str(ROOT / "data" / "corpus"),
+        "--preset", "tiny",
+        "--steps", os.environ.get("OWNEDLM_BOOTSTRAP_STEPS", "20"),
+        "--batch-size", "2",
+        "--seq-len", "64",
+        "--log-every", "20",
+        "--save-every", "20",
+        "--out", str(CHECKPOINT),
+        "--device", "cpu",
+    ]
+    try:
+        subprocess.run(command, cwd=ROOT, check=True, timeout=240)
+        if not CHECKPOINT.is_file() or CHECKPOINT.stat().st_size == 0:
+            raise RuntimeError("training finished without a non-empty checkpoint")
+        print(f"[OwnedLM] Bootstrap checkpoint created ({CHECKPOINT.stat().st_size} bytes).")
+    except Exception as exc:
+        print(f"[OwnedLM] Bootstrap training failed: {type(exc).__name__}: {exc}")
+
+
 def main() -> None:
+    _ensure_checkpoint()
     server = ThreadingHTTPServer((HOST, PORT), OwnedLMHandler)
     print(f"OwnedLM server listening on http://{HOST}:{PORT}")
     print(f"Checkpoint: {CHECKPOINT}")
