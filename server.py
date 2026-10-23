@@ -13,6 +13,10 @@ from types import SimpleNamespace
 from urllib.parse import unquote, urlparse
 
 from generate import generate
+from model import TinyLM, config_from_preset
+from tokenizer import CharTokenizer
+from dataset import load_text_files
+import torch
 
 ROOT = Path(__file__).resolve().parent
 WEB_ROOT = ROOT / "dist"
@@ -22,6 +26,7 @@ PORT = int(os.environ.get("PORT", "8080"))
 MAX_BODY_BYTES = 16_384
 MAX_PROMPT_CHARS = 2_000
 MAX_NEW_TOKENS = 120
+BOOTSTRAP_ERROR = ""
 
 
 class OwnedLMHandler(BaseHTTPRequestHandler):
@@ -78,10 +83,11 @@ class OwnedLMHandler(BaseHTTPRequestHandler):
                     "engine": "local-pytorch",
                     "checkpoint": "checkpoints/tiny.pt",
                     "message": (
-                        "النموذج المدرّب جاهز للتوليد."
+                        "النموذج التجريبي جاهز للتوليد."
                         if ready
                         else "لا توجد نقطة حفظ للنموذج داخل النشر بعد؛ الواجهة تعمل لكن الدردشة غير جاهزة."
                     ),
+                    "bootstrap_error": BOOTSTRAP_ERROR,
                 },
             )
             return
@@ -181,7 +187,42 @@ def _ensure_checkpoint() -> None:
             raise RuntimeError("training finished without a non-empty checkpoint")
         print(f"[OwnedLM] Bootstrap checkpoint created ({CHECKPOINT.stat().st_size} bytes).")
     except Exception as exc:
-        print(f"[OwnedLM] Bootstrap training failed: {type(exc).__name__}: {exc}")
+        global BOOTSTRAP_ERROR
+        BOOTSTRAP_ERROR = f"{type(exc).__name__}: {exc}"
+        print(f"[OwnedLM] Bootstrap training failed: {BOOTSTRAP_ERROR}")
+        # Last-resort checkpoint: keep the API usable even if short bootstrap
+        # training fails in a restricted hosting environment. This fallback
+        # is randomly initialized and must not be presented as a trained model.
+        try:
+            documents = load_text_files(ROOT / "data" / "corpus")
+            texts = [text for _name, text in documents]
+            if not texts:
+                raise RuntimeError("no training text files found")
+            tokenizer = CharTokenizer.from_texts(texts)
+            cfg = config_from_preset("tiny", tokenizer.vocab_size, pad_id=tokenizer.pad_id)
+            model = TinyLM(cfg)
+            CHECKPOINT.parent.mkdir(parents=True, exist_ok=True)
+            torch.save(
+                {
+                    "format": 1,
+                    "step": 0,
+                    "config": cfg.to_dict(),
+                    "tokenizer": tokenizer.to_dict(),
+                    "model": model.state_dict(),
+                },
+                CHECKPOINT,
+            )
+            if not CHECKPOINT.is_file() or CHECKPOINT.stat().st_size == 0:
+                raise RuntimeError("fallback checkpoint was not saved")
+            print(
+                f"[OwnedLM] Created fallback checkpoint ({CHECKPOINT.stat().st_size} bytes); "
+                "weights are untrained."
+            )
+        except Exception as fallback_exc:
+            BOOTSTRAP_ERROR += (
+                f"; fallback failed: {type(fallback_exc).__name__}: {fallback_exc}"
+            )
+            print(f"[OwnedLM] Fallback checkpoint failed: {fallback_exc}")
 
 
 def main() -> None:
