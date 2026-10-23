@@ -1,33 +1,31 @@
 # SPDX-License-Identifier: MIT
-"""Local-only HTTP bridge between the OwnedLM web UI and the trained checkpoint.
-
-Run with: python server.py
-The server binds to loopback only and never calls an external model API.
-"""
+"""HTTP bridge for the OwnedLM UI and its local PyTorch checkpoint."""
 from __future__ import annotations
 
 import json
+import mimetypes
+import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 from generate import generate
 
 ROOT = Path(__file__).resolve().parent
+WEB_ROOT = ROOT / "dist"
 CHECKPOINT = ROOT / "checkpoints" / "tiny.pt"
-HOST = "127.0.0.1"
-PORT = 8090
+HOST = os.environ.get("HOST", "0.0.0.0")
+PORT = int(os.environ.get("PORT", "8080"))
 MAX_BODY_BYTES = 16_384
 MAX_PROMPT_CHARS = 2_000
 MAX_NEW_TOKENS = 120
 
 
 class OwnedLMHandler(BaseHTTPRequestHandler):
-    server_version = "OwnedLMLocal/1.0"
+    server_version = "OwnedLM/1.0"
 
     def log_message(self, fmt: str, *args: object) -> None:
-        # Keep requests visible in the terminal without exposing prompt text.
         print(f"[OwnedLM] {self.address_string()} - {fmt % args}")
 
     def _send_json(self, status: int, payload: dict) -> None:
@@ -36,6 +34,34 @@ class OwnedLMHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _serve_web(self, request_path: str) -> None:
+        if not WEB_ROOT.is_dir():
+            self._send_json(503, {"error": "واجهة الويب غير مبنية داخل الحاوية."})
+            return
+        relative = unquote(request_path).lstrip("/") or "index.html"
+        candidate = (WEB_ROOT / relative).resolve()
+        try:
+            candidate.relative_to(WEB_ROOT.resolve())
+        except ValueError:
+            self._send_json(404, {"error": "المسار غير موجود."})
+            return
+        if not candidate.is_file():
+            # Client-side routes should load the single-page app entry point.
+            candidate = WEB_ROOT / "index.html"
+        if not candidate.is_file():
+            self._send_json(404, {"error": "ملف الواجهة غير موجود."})
+            return
+        body = candidate.read_bytes()
+        content_type = mimetypes.guess_type(candidate.name)[0] or "application/octet-stream"
+        if content_type.startswith("text/") or content_type in ("application/javascript", "application/json"):
+            content_type += "; charset=utf-8"
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("X-Content-Type-Options", "nosniff")
         self.end_headers()
         self.wfile.write(body)
 
@@ -52,12 +78,15 @@ class OwnedLMHandler(BaseHTTPRequestHandler):
                     "message": (
                         "النموذج المدرّب جاهز للتوليد."
                         if ready
-                        else "لا توجد نقطة حفظ بعد. درّب النموذج أولاً حتى checkpoints/tiny.pt."
+                        else "لا توجد نقطة حفظ للنموذج داخل النشر بعد؛ الواجهة تعمل لكن الدردشة غير جاهزة."
                     ),
                 },
             )
             return
-        self._send_json(404, {"error": "المسار غير موجود."})
+        if path.startswith("/api/"):
+            self._send_json(404, {"error": "المسار غير موجود."})
+            return
+        self._serve_web(path)
 
     def do_POST(self) -> None:
         if urlparse(self.path).path != "/api/chat":
@@ -73,13 +102,11 @@ class OwnedLMHandler(BaseHTTPRequestHandler):
         if length < 1 or length > MAX_BODY_BYTES:
             self._send_json(413, {"error": "حجم الطلب غير مسموح."})
             return
-
         try:
             payload = json.loads(self.rfile.read(length).decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError):
             self._send_json(400, {"error": "أرسل طلب JSON صالحاً."})
             return
-
         prompt = payload.get("message") if isinstance(payload, dict) else None
         if not isinstance(prompt, str) or not prompt.strip():
             self._send_json(400, {"error": "اكتب رسالة أولاً."})
@@ -91,18 +118,14 @@ class OwnedLMHandler(BaseHTTPRequestHandler):
         if not CHECKPOINT.is_file():
             self._send_json(
                 503,
-                {
-                    "error": "النموذج غير مدرّب بعد. شغّل أمر التدريب الظاهر في الواجهة أولاً."
-                },
+                {"error": "النموذج غير موجود على الخادم بعد؛ يجب توفير checkpoints/tiny.pt قبل تفعيل الدردشة."},
             )
             return
-
         try:
             max_new_tokens = int(payload.get("max_new_tokens", 80))
         except (TypeError, ValueError):
             max_new_tokens = 80
         max_new_tokens = max(1, min(max_new_tokens, MAX_NEW_TOKENS))
-
         try:
             generated = generate(
                 SimpleNamespace(
@@ -118,16 +141,13 @@ class OwnedLMHandler(BaseHTTPRequestHandler):
                 include_prompt=False,
             )
         except Exception as exc:
-            # Details remain in the local terminal; do not leak tracebacks to the browser.
             print(f"[OwnedLM] generation error: {type(exc).__name__}: {exc}")
             self._send_json(500, {"error": "تعذّر توليد النص. راجع سجل خادم Python."})
             return
-
-        continuation = generated
         self._send_json(
             200,
             {
-                "reply": continuation.strip() or "النموذج لم يولّد تتمة واضحة لهذه الرسالة.",
+                "reply": generated.strip() or "النموذج لم يولّد تتمة واضحة لهذه الرسالة.",
                 "engine": "local-pytorch",
                 "note": "تتمة نصية من نموذج تجريبي صغير، وليست إجابة موثوقة مثل المساعدات الكبيرة.",
             },
@@ -136,9 +156,8 @@ class OwnedLMHandler(BaseHTTPRequestHandler):
 
 def main() -> None:
     server = ThreadingHTTPServer((HOST, PORT), OwnedLMHandler)
-    print(f"OwnedLM local API: http://{HOST}:{PORT}")
+    print(f"OwnedLM server listening on http://{HOST}:{PORT}")
     print(f"Checkpoint: {CHECKPOINT}")
-    print("لا توجد اتصالات بنماذج خارجية. أوقف الخادم باستخدام Ctrl+C.")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
