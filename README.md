@@ -135,3 +135,25 @@ data/private/     بيانات محلية غير متتبعة
 3. انتقل إلى `--preset small` على GPU، مع `--val-ratio` وملفات تحقق لم تُستخدم في التدريب.
 4. بعدها: مجزئ BPE تدرّبه أنت على نصك، وقياس الحيرة (perplexity) على قسم محجوز، ثم تكبير العرض والطبقات فقط إذا بقيت الخسارة على التحقق تتحسن.
 5. لا تقارن المخرجات بمساعد تجاري قبل أن تمتلك بيانات وحساباً بهذا الحجم، وقبل أن تقيس ذلك على نص لم يره النموذج.
+
+
+## Conversation storage and learning-data collection
+
+The API stores each incoming user message and generated assistant reply in
+`conversation_messages`. Set `DATABASE_URL` to a PostgreSQL connection string
+(preferred for hosted deployments). If it is not set, the API falls back to
+SQLite at `/data/ownedlm.sqlite3`; this file survives redeploys only when the
+hosting platform provides persistent storage mounted at `/data`.
+
+Set `OWNEDLM_ADMIN_TOKEN` to a long random secret in the hosting environment.
+The following private endpoints require that value in the `X-Admin-Token`
+header:
+
+- `GET /admin/training-stats` — count stored and pending messages.
+- `GET /admin/training-data` — export pending conversation text for review
+  and later training.
+
+Collected conversations are **training candidates**, not immediate weight
+updates. Review and filter them before training; do not train on private,
+sensitive, abusive, or low-quality content. A training run and deployment of
+its checkpoint are still required before the model's weights change.
