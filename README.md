@@ -9,7 +9,7 @@
 ## ما الذي يفعله النموذج
 
 - محوّل فكّ فقط (decoder-only): تضمين رموز، مواضع متعلَّمة، انتباه ذاتي سببي متعدد الرؤوس، طبقة تغذية أمامية، وربط أوزان التضمين برأس الإخراج.
-- المفردات تُبنى من حروف ملفاتك (UTF-8)، بما فيها العربية، من غير مفردات منزلة.
+- مفردات التدريب الجديدة تستخدم Byte-level BPE يتعلم أجزاء الكلمات من ملفاتك، مع الاحتفاظ بدعم نقاط الاستئناف القديمة ذات ترميز الحروف.
 - التدريب: AdamW، قص المتدرجات، فقدان الانتروبيا المتقاطعة، حفظ نقطة استئناف.
 - التوليد: اختيار عشوائي بدرجة حرارة و`top-k`، أو اختيار جشع إذا كانت الحرارة `0`.
 
@@ -70,19 +70,19 @@ python -m unittest discover -s tests -t . -v
 تدريب قصير على البذرة. الناتج يبقى محلياً داخل `checkpoints/` ولا يُرفع إلى Git:
 
 ```bash
-python train.py --data data/corpus --preset tiny --steps 200 --batch-size 16 --seq-len 64 --out checkpoints/tiny.pt
+python train.py --data data/corpus --preset tiny --tokenizer-type bpe --vocab-size 2048 --steps 200 --batch-size 16 --seq-len 64 --out checkpoints/tiny-bpe.pt
 ```
 
 استئناف التدريب من نفس الملف:
 
 ```bash
-python train.py --data data/corpus --steps 200 --resume checkpoints/tiny.pt --out checkpoints/tiny.pt
+python train.py --data data/corpus --steps 200 --resume checkpoints/tiny-bpe.pt --out checkpoints/tiny-bpe.pt
 ```
 
 توليد محلي من غير شبكة:
 
 ```bash
-python generate.py --checkpoint checkpoints/tiny.pt --prompt "في ورشة" --max-new-tokens 80 --temperature 0.9 --top-k 40
+python generate.py --checkpoint checkpoints/tiny-bpe.pt --prompt "في ورشة" --max-new-tokens 80 --temperature 0.9 --top-k 40
 ```
 
 تقسيم تحقق اختياري عندما يكون عندك أكثر من ملف: `--val-ratio 0.1`. القيمة الافتراضية `0` حتى تُستخدم البذرة كلها في التدريب.
@@ -93,6 +93,8 @@ python generate.py --checkpoint checkpoints/tiny.pt --prompt "في ورشة" --m
 | --- | --- | --- |
 | `--data` | مجلد ملفات `.txt` | `data/corpus` |
 | `--preset` | `tiny` أو `small` | `tiny` |
+| `--tokenizer-type` | `bpe` أو `char` (الافتراضي BPE) | `bpe` |
+| `--vocab-size` | حجم مفردات BPE | `2048` |
 | `--steps` | عدد خطوات هذه الجولة | `200` |
 | `--seq-len` | طول النافذة، ولا يتجاوز حد الإعداد | `64` |
 | `--lr` | معدل تعلم AdamW | `0.0003` |
