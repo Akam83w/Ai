@@ -4,10 +4,12 @@ on:
   push:
     branches:
       - feature/local-chat-ui
+      - deploy/deplexo
   pull_request:
     branches:
       - main
       - feature/local-chat-ui
+      - deploy/deplexo
   workflow_dispatch:
 
 permissions:
