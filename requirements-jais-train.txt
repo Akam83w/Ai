@@ -1,0 +1,4 @@
+# Optional dependencies for LoRA fine-tuning of Jais-3
+-r requirements-jais.txt
+datasets>=3.0.0
+peft>=0.13.0
