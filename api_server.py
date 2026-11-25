@@ -19,7 +19,7 @@ DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
 DB_PATH = Path(os.getenv("OWNEDLM_DB_PATH", "/data/ownedlm.sqlite3"))
 ADMIN_TOKEN = os.getenv("OWNEDLM_ADMIN_TOKEN", "")
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-app = FastAPI(title="OwnedLM Arabic Companion API", version="1.2.0")
+app = FastAPI(title="OwnedLM Arabic Companion API", version="1.3.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=False, allow_methods=["GET","POST","DELETE"], allow_headers=["Content-Type","X-Admin-Token"])
 
 class Message(BaseModel):
