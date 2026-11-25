@@ -12,7 +12,7 @@ import argparse
 import torch
 
 from model import ModelConfig, TinyLM
-from tokenizer import CharTokenizer
+from tokenizer import tokenizer_from_dict
 
 
 def generate(args: argparse.Namespace) -> str:
@@ -20,7 +20,7 @@ def generate(args: argparse.Namespace) -> str:
         torch.manual_seed(args.seed)
     device = torch.device(args.device)
     checkpoint = torch.load(args.checkpoint, map_location=device, weights_only=False)
-    tokenizer = CharTokenizer.from_dict(checkpoint["tokenizer"])
+    tokenizer = tokenizer_from_dict(checkpoint["tokenizer"])
     cfg = ModelConfig.from_dict(checkpoint["config"])
     model = TinyLM(cfg).to(device)
     model.load_state_dict(checkpoint["model"])
