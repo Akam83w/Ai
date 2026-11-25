@@ -1,9 +1,5 @@
 #!/usr/bin/env python3
-"""Collect Arabic teaching examples from the project's Jais-compatible chat API.
-
-This creates a local distillation corpus; it does not copy model weights.
-Generated files are written under data/private and should not be committed.
-"""
+"""Generate Arabic-only teaching examples from the project's local Jais API."""
 from __future__ import annotations
 
 import argparse
@@ -24,9 +20,10 @@ def ask_api(base_url: str, prompt: str, max_new_tokens: int, temperature: float)
             {
                 "role": "system",
                 "content": (
-                    "أنت معلّم عربي دقيق. أجب بالعربية فقط. اشرح بوضوح وبأمثلة صحيحة. "
+                    "أنت معلّم متخصص في اللغة العربية والمعارف العامة. أجب بالعربية الفصحى المعاصرة فقط. "
+                    "لا تستخدم اللهجات المحلية. اشرح بدقة وبترتيب، وقدّم أمثلة وتمارين عند ملاءمة السؤال. "
                     "ميّز الحقيقة من الرأي، ولا تخترع مصادر أو أرقاماً. عند عدم التأكد صرّح بذلك. "
-                    "استخدم الفصحى أساساً، وأضف مثالاً عراقياً عند ملاءمة الموضوع."
+                    "لا تكرر السؤال ولا تذكر أنك نموذج ذكاء اصطناعي."
                 ),
             },
             {"role": "user", "content": prompt},
@@ -41,25 +38,25 @@ def ask_api(base_url: str, prompt: str, max_new_tokens: int, temperature: float)
         headers={"Content-Type": "application/json"},
         method="POST",
     )
-    with urllib.request.urlopen(request, timeout=600) as response:
+    with urllib.request.urlopen(request, timeout=900) as response:
         result = json.loads(response.read().decode("utf-8"))
     return result["choices"][0]["message"]["content"].strip()
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Generate Arabic distillation examples from Jais")
-    parser.add_argument("--base-url", default="http://127.0.0.1:8000", help="Base URL of the running Jais API")
+    parser = argparse.ArgumentParser(description="Generate Arabic-only distillation data from local Jais")
+    parser.add_argument("--base-url", default="http://127.0.0.1:8000")
     parser.add_argument("--samples-per-task", type=int, default=1)
-    parser.add_argument("--max-new-tokens", type=int, default=700)
-    parser.add_argument("--temperature", type=float, default=0.35)
+    parser.add_argument("--max-new-tokens", type=int, default=900)
+    parser.add_argument("--temperature", type=float, default=0.25)
     parser.add_argument("--seed", type=int, default=83)
-    parser.add_argument("--limit", type=int, default=0, help="Optional maximum number of prompts; 0 means all")
-    parser.add_argument("--pause", type=float, default=1.0)
+    parser.add_argument("--limit", type=int, default=0)
+    parser.add_argument("--pause", type=float, default=0.5)
     parser.add_argument("--output", default="data/private/jais_arabic_distilled.jsonl")
     args = parser.parse_args()
 
-    if args.samples_per_task < 1 or args.max_new_tokens < 1:
-        raise SystemExit("samples-per-task and max-new-tokens must be positive")
+    if args.samples_per_task < 1 or args.max_new_tokens < 1 or args.pause < 0:
+        raise SystemExit("samples-per-task and max-new-tokens must be positive; pause cannot be negative")
 
     topics = json.loads(TOPICS.read_text(encoding="utf-8"))
     jobs = [(group["area"], task) for group in topics for task in group["tasks"]]
@@ -67,7 +64,7 @@ def main() -> None:
     if args.limit:
         jobs = jobs[: args.limit]
 
-    output_path = ROOT / args.output
+    output_path = (ROOT / args.output).resolve()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     text_path = output_path.with_suffix(".txt")
     count = 0
@@ -77,22 +74,24 @@ def main() -> None:
             for sample_index in range(args.samples_per_task):
                 prompt = (
                     f"المجال: {area}.\nالمطلوب: {task}\n"
-                    "اجعل الإجابة درساً مستقلاً منظماً بعناوين وأمثلة وتمرين قصير مع الحل. "
-                    "لا تذكر أنك نموذج ذكاء اصطناعي ولا تكرر السؤال."
+                    "قدّم درساً مستقلاً منظماً: تعريفات، شرح، أمثلة صحيحة، ثم تمريناً قصيراً مع الحل. "
+                    "استخدم المصطلحات العربية الفصيحة، ولا تخرج عن موضوع الدرس."
                 )
                 try:
                     answer = ask_api(args.base_url, prompt, args.max_new_tokens, args.temperature)
                 except (urllib.error.URLError, TimeoutError, KeyError, ValueError) as exc:
-                    print(f"FAILED [{area}] {task}: {exc}")
+                    print(f"FAILED [{area}] {task}: {type(exc).__name__}: {exc}")
                     continue
-                if len(answer) < 80:
+                if len(answer) < 100:
                     print(f"SKIPPED short answer [{area}] {task}")
                     continue
                 row = {
-                    "source": "Jais teacher-generated Arabic example",
+                    "source": "Jais-3 locally generated Arabic teaching example",
                     "area": area,
                     "prompt": prompt,
                     "response": answer,
+                    "language": "ar",
+                    "register": "modern_standard_arabic",
                 }
                 jsonl.write(json.dumps(row, ensure_ascii=False) + "\n")
                 jsonl.flush()
@@ -106,7 +105,6 @@ def main() -> None:
     print(f"Done. Added {count} examples.")
     print(f"JSONL: {output_path}")
     print(f"Training text: {text_path}")
-    print("These are generated teaching examples, not the full Arabic language or copied model weights.")
 
 
 if __name__ == "__main__":
