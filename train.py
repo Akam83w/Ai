@@ -75,6 +75,11 @@ def train(args: argparse.Namespace) -> dict:
     torch.manual_seed(args.seed)
     device = pick_device(args.device)
     documents = load_text_files(args.data)
+    if args.validation_data:
+        train_docs = documents
+        val_docs = load_text_files(args.validation_data)
+    else:
+        train_docs, val_docs = split_documents(documents, args.val_ratio, args.seed)
     start_step = 0
     resume_ckpt = None
 
@@ -97,7 +102,6 @@ def train(args: argparse.Namespace) -> dict:
     if args.seq_len > cfg.max_seq_len:
         raise ValueError(f"--seq-len {args.seq_len} is above the model max_seq_len {cfg.max_seq_len}")
 
-    train_docs, val_docs = split_documents(documents, args.val_ratio, args.seed)
     train_ids = encode_documents(tokenizer, train_docs)
     unk = sum(1 for token in train_ids if token == tokenizer.unk_id)
     usable = len(train_ids)
@@ -192,7 +196,8 @@ def checkpoint_payload(model, optimizer, tokenizer, step: int, loss: float) -> d
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Train a small Transformer from random weights")
-    parser.add_argument("--data", default="data/corpus", help="directory of .txt files you may use")
+    parser.add_argument("--data", default="data/corpus", help="directory of training .txt files you may use")
+    parser.add_argument("--validation-data", default="", help="optional separate directory of held-out validation .txt files")
     parser.add_argument("--preset", default="tiny", choices=sorted(PRESETS))
     parser.add_argument("--tokenizer-type", default="bpe", choices=("bpe", "char"))
     parser.add_argument("--vocab-size", type=int, default=2048)
