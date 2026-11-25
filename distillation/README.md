@@ -4,7 +4,7 @@ This pipeline uses the project's locally hosted Jais-3 teacher to generate Arabi
 
 ## Teacher model
 
-- Project checkpoint: `Dhunun/Jais-3.0.9B` (private Hugging Face repository).
+- Project checkpoint: `Dhunun/OwnedLM-Jais-3-0.9B` (private Hugging Face repository).
 - Upstream base: `inception42/Jais-3-0.9B`.
 - Architecture: K2 Horizon, approximately 1.078B parameters; the current safetensors file is about 2.16 GB.
 - The upstream model card declares Apache-2.0. Keep the upstream license, copyright notices, and attribution with redistributed model code or weights.
@@ -20,7 +20,7 @@ Start the local teacher API:
 
 ```bash
 pip install -r requirements-jais.txt
-JAIS_MODEL_ID=Dhunun/Jais-3.0.9B python jais_api.py
+JAIS_MODEL_ID=Dhunun/OwnedLM-Jais-3-0.9B python jais_api.py
 ```
 
 Keep any Hugging Face token in the runtime's secret manager or environment; never commit it.
@@ -64,7 +64,7 @@ Run on a CUDA GPU:
 
 ```bash
 python distillation/train_jais_lora.py \
-  --model-id Dhunun/Jais-3.0.9B \
+  --model-id Dhunun/OwnedLM-Jais-3-0.9B \
   --train-file data/private/arabic_sft/train.jsonl \
   --validation-file data/private/arabic_sft/validation.jsonl \
   --output-dir adapters/ownedlm-arabic-v1
@@ -83,5 +83,5 @@ Use `--max-length`, `--batch-size`, and `--gradient-accumulation` to fit availab
 ## References
 
 - Upstream model: https://huggingface.co/inception42/Jais-3-0.9B
-- Project checkpoint: https://huggingface.co/Dhunun/Jais-3.0.9B
+- Project checkpoint: https://huggingface.co/Dhunun/OwnedLM-Jais-3-0.9B
 - License: https://www.apache.org/licenses/LICENSE-2.0
