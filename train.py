@@ -17,7 +17,7 @@ from torch.utils.data import DataLoader
 
 from dataset import CausalWindowDataset, encode_documents, load_text_files, split_documents
 from model import PRESETS, ModelConfig, TinyLM, config_from_preset
-from tokenizer import CharTokenizer
+from tokenizer import tokenizer_from_dict, tokenizer_from_texts
 
 CHECKPOINT_FORMAT = 1
 
@@ -83,11 +83,15 @@ def train(args: argparse.Namespace) -> dict:
         resume_ckpt = torch.load(resume_path, map_location="cpu", weights_only=False)
         if resume_ckpt.get("format") != CHECKPOINT_FORMAT:
             raise ValueError(f"unsupported checkpoint format in {resume_path}")
-        tokenizer = CharTokenizer.from_dict(resume_ckpt["tokenizer"])
+        tokenizer = tokenizer_from_dict(resume_ckpt["tokenizer"])
         cfg = ModelConfig.from_dict(resume_ckpt["config"])
         start_step = int(resume_ckpt["step"])
     else:
-        tokenizer = CharTokenizer.from_texts([text for _name, text in documents])
+        tokenizer = tokenizer_from_texts(
+            [text for _name, text in documents],
+            tokenizer_type=args.tokenizer_type,
+            vocab_size=args.vocab_size,
+        )
         cfg = config_from_preset(args.preset, tokenizer.vocab_size, pad_id=tokenizer.pad_id)
 
     if args.seq_len > cfg.max_seq_len:
@@ -174,7 +178,7 @@ def train(args: argparse.Namespace) -> dict:
     return payload
 
 
-def checkpoint_payload(model, optimizer, tokenizer: CharTokenizer, step: int, loss: float) -> dict:
+def checkpoint_payload(model, optimizer, tokenizer, step: int, loss: float) -> dict:
     return {
         "format": CHECKPOINT_FORMAT,
         "step": step,
@@ -190,6 +194,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Train a small Transformer from random weights")
     parser.add_argument("--data", default="data/corpus", help="directory of .txt files you may use")
     parser.add_argument("--preset", default="tiny", choices=sorted(PRESETS))
+    parser.add_argument("--tokenizer-type", default="bpe", choices=("bpe", "char"))
+    parser.add_argument("--vocab-size", type=int, default=2048)
     parser.add_argument("--steps", type=int, default=200)
     parser.add_argument("--batch-size", type=int, default=16)
     parser.add_argument("--seq-len", type=int, default=64)
