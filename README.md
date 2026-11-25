@@ -139,6 +139,40 @@ data/private/     بيانات محلية غير متتبعة
 5. لا تقارن المخرجات بمساعد تجاري قبل أن تمتلك بيانات وحساباً بهذا الحجم، وقبل أن تقيس ذلك على نص لم يره النموذج.
 
 
+## Iraqi dialogue data preparation
+
+A separate optional importer can prepare an Iraqi-dialect dialogue corpus
+locally. The selected source is the
+[Iraqi Arabic Sales Dialogue Dataset](https://huggingface.co/datasets/ameer4wisam/iraqi-arabic-sales-dialogue-dataset),
+published under CC BY 4.0. It is synthetic, template-generated, mainly
+Baghdadi-based, and contains retail plus everyday topics; it is not natural
+Moslawi speech. The importer skips the disclosed scraped-car subset, removes
+phone-number patterns, ignores system prompts, deduplicates exact conversations,
+and preserves the published train/validation split.
+
+Install the optional preparation dependency and run:
+
+```bash
+pip install -r requirements-data.txt
+python prepare_iraqi_dataset.py --config v4
+```
+
+The result is written under `data/private/iraqi_sales/`, which is excluded
+from Git. Inspect the sample conversations and `import_report.json` before
+training. Do not publish the downloaded data or generated checkpoints without
+preserving the dataset attribution and checking its license obligations.
+
+Train against the training split and evaluate against the held-out split:
+
+```bash
+python train.py --data data/private/iraqi_sales/train --validation-data data/private/iraqi_sales/validation --preset small --tokenizer-type bpe --vocab-size 2048 --steps 10000 --batch-size 8 --seq-len 256 --device cuda --out checkpoints/iraqi-small.pt
+```
+
+This is a starting experiment, not a promise of a capable assistant. The
+dataset is template-generated and Baghdadi-based; add reviewed Moslawi
+examples and broader factual text you have rights to use, then compare
+validation loss and held-out conversations before deploying any checkpoint.
+
 ## Local knowledge retrieval and deployment diagnostics
 
 The API can now retrieve a high-confidence answer from adjacent
