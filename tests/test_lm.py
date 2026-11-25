@@ -94,6 +94,14 @@ class ModelTests(unittest.TestCase):
         self.assertLess(last, first * 0.7)
         self.assertTrue(math_isfinite(last))
 
+    def test_bpe_tokenizer_roundtrip_and_checkpoint_restore(self) -> None:
+        tokenizer = BpeTokenizer.from_texts(["مرحبا بالعالم هذا نموذج عربي " * 20], vocab_size=512)
+        text = "مرحبا بالعالم"
+        encoded = tokenizer.encode(text, add_bos=True, add_eos=True)
+        self.assertEqual(tokenizer.decode(encoded), text)
+        restored = tokenizer_from_dict(tokenizer.to_dict())
+        self.assertEqual(restored.decode(restored.encode(text)), text)
+
     def test_tokenizer_roundtrip_and_unknown(self) -> None:
         tokenizer = CharTokenizer.from_texts(["مرحبا hello"])
         self.assertEqual(tokenizer.decode(tokenizer.encode("مرحبا")), "مرحبا")
@@ -120,7 +128,7 @@ class TrainGenerateTests(unittest.TestCase):
             first = torch.load(out, map_location="cpu", weights_only=False)
             self.assertEqual(first["step"], 3)
             self.assertEqual(first["format"], 1)
-            self.assertIn("itos", first["tokenizer"])
+            self.assertEqual(first["tokenizer"]["type"], "bpe")
 
             resumed = _args(data, out, steps=2)
             resumed.resume = str(out)
@@ -158,6 +166,8 @@ def _args(data: Path, out: Path, steps: int) -> Namespace:
     return Namespace(
         data=str(data),
         preset="tiny",
+        tokenizer_type="bpe",
+        vocab_size=512,
         steps=steps,
         batch_size=4,
         seq_len=32,
