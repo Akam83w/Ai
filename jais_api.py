@@ -21,7 +21,7 @@ ADAPTER_ID = os.getenv("JAIS_ADAPTER_ID", "").strip()
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 DTYPE = torch.float16 if DEVICE.type == "cuda" else torch.float32
 
-app = FastAPI(title="Jais – Dhunun API", version="0.3.0")
+app = FastAPI(title="OwnedLM Arabic Model API", version="0.4.0")
 # Prototype setting: allow the separate chat page to call this API from a browser.
 # Before public deployment, replace "*" with the exact website origin and add authentication.
 app.add_middleware(
@@ -113,7 +113,9 @@ def chat(request: ChatRequest):
             raise RuntimeError("The model returned an empty assistant answer.")
 
         return {
-            "model": MODEL_ID,
+            "model": "OwnedLM-Arabic",
+            "base_model": MODEL_ID,
+            "adapter": ADAPTER_ID or None,
             "choices": [{"message": {"role": "assistant", "content": answer}}],
         }
     except Exception as exc:
