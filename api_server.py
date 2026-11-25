@@ -12,7 +12,7 @@ from tokenizer import CharTokenizer
 ROOT = Path(__file__).resolve().parent
 CHECKPOINT = Path(os.getenv("OWNEDLM_CHECKPOINT", str(ROOT / "checkpoints" / "model.pt")))
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-app = FastAPI(title="OwnedLM Arabic API", version="1.0.1")
+app = FastAPI(title="OwnedLM Arabic Companion API", version="1.1.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=False, allow_methods=["GET","POST"], allow_headers=["Content-Type"])
 
 class Message(BaseModel):
@@ -51,13 +51,21 @@ def load_checkpoint():
 def starter_reply(text: str) -> str:
     s = re.sub(r"\\s+", " ", text.strip().lower())
     if re.search(r"(هلو|هلا|مرحبا|السلام عليكم|شلونك|كيف حالك)", s):
-        return "هلا بيك! أنا نموذجك العربي قيد التطوير. وصلتني رسالتك، شنو تحب نحچي؟"
+        return "هلا بيك! أني صديقك العربي قيد التطوير. بعدني أتعلم شلون أسولف وياك بصورة طبيعية."
     if re.search(r"(اسمك|من أنت|منو انت|من تكون)", s):
-        return "أنا نموذجك العربي المستقل OwnedLM، وهذه نسخة تشغيل أولية."
-    if re.search(r"(شكرا|شكرًا|ممنون|تسلم)", s): return "العفو، بالخدمة دائماً."
-    if re.search(r"(ساعدني|تساعدني|مساعدة)", s):
-        return "أكيد أساعدك. اكتب طلبك بشكل محدد، وسأحاول توجيهك ضمن قدرات النسخة الحالية."
-    return "وصلتني رسالتك. الخادم يعمل، لكن أوزان النموذج المدرّبة غير موجودة على الخادم بعد؛ هذا ردّ تشغيل أولي وليس توليداً من النموذج المتعلّم."
+        return "أني صديقك العربي OwnedLM، ودا نبني شخصيتي وذاكرتي خطوة بخطوة."
+    return "وصلتني رسالتك، بس بعدني ما أملك أوزاناً لغوية مدرّبة حتى أقدر أجاوبك من فهمي. نحتاج نكمل تدريبي."
+
+def build_dialogue(messages: list[Message], limit: int) -> str:
+    lines = []
+    for item in messages[-8:]:
+        if item.role == "system":
+            continue
+        speaker = "المستخدم" if item.role == "user" else "الصديق"
+        content = re.sub(r"\\s+", " ", item.content).strip()
+        lines.append(f"{speaker}: {content}")
+    lines.append("الصديق:")
+    return "\\n".join(lines)[-limit:]
 
 @app.get("/health")
 def health():
@@ -66,23 +74,22 @@ def health():
 
 @app.post("/v1/chat/completions")
 def chat(req: ChatRequest):
-    prompts = [m.content for m in req.messages if m.role == "user"]
-    if not prompts:
-        answer, mode = "اكتب رسالتك حتى أجاوبك.", "starter"
+    prompt_text = build_dialogue(req.messages, 120)
+    model, tok = load_checkpoint()
+    if model is None:
+        last_user = next((m.content for m in reversed(req.messages) if m.role == "user"), "")
+        answer, mode = starter_reply(last_user), "starter"
     else:
-        prompt = prompts[-1]
-        model, tok = load_checkpoint()
-        if model is None:
-            answer, mode = starter_reply(prompt), "starter"
-        else:
-            ids = tok.encode(prompt, add_bos=True) or [tok.bos_id]
-            x = torch.tensor([ids], dtype=torch.long, device=DEVICE)
-            with torch.inference_mode():
-                out = model.generate(x, max_new_tokens=min(req.max_new_tokens,128), temperature=req.temperature, top_k=20, eos_id=tok.eos_id)
-            answer = tok.decode(out[0].tolist()).strip()
-            answer = answer[len(prompt):].strip() if answer.startswith(prompt) else answer
-            if not answer: answer = "لم أتمكن من توليد رد واضح من الأوزان الحالية."
-            mode = "trained_model"
+        prompt_text = prompt_text[-(model.cfg.max_seq_len - 1):]
+        ids = tok.encode(prompt_text, add_bos=True) or [tok.bos_id]
+        x = torch.tensor([ids], dtype=torch.long, device=DEVICE)
+        with torch.inference_mode():
+            out = model.generate(x, max_new_tokens=min(req.max_new_tokens,128), temperature=req.temperature, top_k=20, eos_id=tok.eos_id)
+        decoded = tok.decode(out[0].tolist()).strip()
+        answer = decoded[len(prompt_text):].strip() if decoded.startswith(prompt_text) else decoded
+        if not answer:
+            answer = "ما كدرت أكمّل الرد من الأوزان الحالية."
+        mode = "trained_model"
     return {"model":"OwnedLM","mode":mode,"choices":[{"message":{"role":"assistant","content":answer}}]}
 
 if __name__ == "__main__":
