@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-"""Character tokenizer built only from text you provide.
+"""Local character and byte-level BPE tokenizers built only from text you provide.
 
 There is no downloaded vocabulary. Characters absent from the saved vocab
 become the unknown token at encode time.
