@@ -1,7 +1,8 @@
-# Optional Jais 3 inference service; separate from the existing web app.
+# Optional Jais-3 inference service
 torch>=2.2.0
-transformers>=5.15.0
+transformers>=4.57.1
 accelerate>=1.0.0
 safetensors>=0.4.0
 fastapi>=0.115.0
 uvicorn[standard]>=0.30.0
+peft>=0.13.0
