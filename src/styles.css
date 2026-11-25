@@ -81,7 +81,8 @@ button:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent);
 }
 .status-dot { width: 9px; height: 9px; flex: 0 0 9px; border-radius: 50%; background: var(--muted); margin-top: 7px; }
 .status-ready .status-dot { background: var(--green); box-shadow: 0 0 0 4px rgba(112, 214, 173, 0.1); }
-.status-needs-checkpoint .status-dot, .status-checking .status-dot { background: var(--amber); }
+.status-needs-checkpoint .status-dot, .status-checking .status-dot, .status-loading .status-dot { background: var(--amber); }
+.status-error .status-dot { background: var(--red); }
 .status-offline .status-dot { background: var(--red); }
 .status-card strong { font-size: 0.9rem; }
 .status-card p { color: var(--muted); font-size: 0.79rem; margin: 5px 0 0; line-height: 1.6; }
