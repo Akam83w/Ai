@@ -14,7 +14,7 @@ The project uses the locally hosted Jais-3 checkpoint as its Arabic-capable teac
 ```bash
 pip install -r requirements-jais.txt
 # Configure HF_TOKEN as a secret/environment variable if the private project checkpoint requires authentication.
-JAIS_MODEL_ID=Dhunun/Jais-3.0.9B python jais_api.py
+JAIS_MODEL_ID=Dhunun/Jais-3.0.9B JAIS_ADAPTER_ID=Dhunun/ownedlm-arabic-v1 python jais_api.py
 ```
 
 The API listens on port 8000.
