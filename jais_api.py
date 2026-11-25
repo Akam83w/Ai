@@ -19,7 +19,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 MODEL_ID = os.getenv("JAIS_MODEL_ID", "Dhunun/Jais-3.0.9B")
 ADAPTER_ID = os.getenv("JAIS_ADAPTER_ID", "").strip()
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-DTYPE = torch.float16 if DEVICE.type == "cuda" else torch.float32
+DTYPE = (torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16) if DEVICE.type == "cuda" else torch.float32
 
 app = FastAPI(title="OwnedLM Arabic Model API", version="0.4.0")
 # Prototype setting: allow the separate chat page to call this API from a browser.
@@ -89,7 +89,7 @@ def chat(request: ChatRequest):
             add_generation_prompt=True,
             return_tensors="pt",
             return_dict=True,
-            reasoning_effort="low",
+            reasoning_effort="high",
         )
         inputs = {key: value.to(DEVICE) for key, value in inputs.items()}
         inputs.pop("token_type_ids", None)
