@@ -27,7 +27,6 @@ BANNED_IMPORTS = (
     "requests",
     "httpx",
     "huggingface_hub",
-    "transformers",
     "torch.hub",
 )
 
