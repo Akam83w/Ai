@@ -137,7 +137,7 @@ def load_checkpoint():
         return None, None
 
 def starter_reply(text: str) -> str:
-    s = re.sub(r"\\s+", " ", text.strip().lower())
+    s = " ".join(text.strip().lower().split())
     if re.search(r"(هلو|هلا|مرحبا|السلام عليكم|شلونك|كيف حالك)", s):
         return "هلا بيك! أني صديقك العربي قيد التطوير. بعدني أتعلم شلون أسولف وياك بصورة طبيعية."
     if re.search(r"(اسمك|من أنت|منو انت|من تكون)", s):
@@ -150,7 +150,7 @@ def build_dialogue(messages: list[Message], limit: int) -> str:
         if item.role == "system":
             continue
         speaker = "المستخدم" if item.role == "user" else "الصديق"
-        content = re.sub(r"\\s+", " ", item.content).strip()
+        content = " ".join(item.content.split()).strip()
         lines.append(f"{speaker}: {content}")
     lines.append("الصديق:")
     return "\n".join(lines)[-limit:]
