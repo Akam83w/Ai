@@ -16,3 +16,7 @@ checkpoints/
 .DS_Store
 data/private/*
 !data/private/.gitkeep
+*.safetensors
+adapters/
+hf_cache/
+model_cache/
