@@ -8,9 +8,6 @@ type Message = {
 
 type ApiStatus = "checking" | "loading" | "ready" | "error" | "offline";
 
-const TRAIN_COMMAND =
-  "python train.py --data data/corpus --preset tiny --steps 200 --val-ratio 0.5 --out checkpoints/tiny.pt";
-
 export default function App() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
