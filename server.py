@@ -1,36 +1,155 @@
 # SPDX-License-Identifier: MIT
-"""HTTP bridge for the OwnedLM UI and its local PyTorch checkpoint."""
+"""OwnedLM web server backed by the local pretrained Arabic Jais-3 checkpoint."""
 from __future__ import annotations
 
 import json
 import mimetypes
 import os
-import subprocess
-import sys
+import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from types import SimpleNamespace
 from urllib.parse import unquote, urlparse
 
-from generate import generate
-from model import TinyLM, config_from_preset
-from tokenizer import CharTokenizer
-from dataset import load_text_files
 import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer
 
 ROOT = Path(__file__).resolve().parent
 WEB_ROOT = ROOT / "dist"
-CHECKPOINT = ROOT / "checkpoints" / "tiny.pt"
 HOST = os.environ.get("HOST", "0.0.0.0")
 PORT = int(os.environ.get("PORT", "8080"))
-MAX_BODY_BYTES = 16_384
-MAX_PROMPT_CHARS = 2_000
-MAX_NEW_TOKENS = 40
-BOOTSTRAP_ERROR = ""
+MODEL_ID = os.environ.get("JAIS_MODEL_ID", "Dhunun/OwnedLM-Jais-3-0.9B")
+HF_HOME = os.environ.get("HF_HOME", "/data/huggingface")
+MAX_BODY_BYTES = 48_000
+MAX_PROMPT_CHARS = 8_000
+MAX_HISTORY_MESSAGES = 16
+MAX_NEW_TOKENS = 512
+MODEL = None
+TOKENIZER = None
+MODEL_LOADING = False
+MODEL_ERROR = ""
+MODEL_LOCK = threading.Lock()
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+DTYPE = torch.bfloat16 if DEVICE == "cpu" else (
+    torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+)
+
+SYSTEM_PROMPT = (
+    "أنت OwnedLM، مساعد عربي مستقل. أجب باللغة العربية الفصحى المعاصرة فقط. "
+    "افهم سياق المحادثة وتذكّر الرسائل السابقة ضمن هذه الجلسة. "
+    "قدّم إجابات واضحة ومفيدة، وإذا لم تعرف معلومة فقل إنك لا تعرفها ولا تختلق حقائق."
+)
+
+
+def load_model() -> None:
+    global MODEL, TOKENIZER, MODEL_LOADING, MODEL_ERROR
+    with MODEL_LOCK:
+        if MODEL is not None or MODEL_LOADING:
+            return
+        MODEL_LOADING = True
+    try:
+        os.environ.setdefault("HF_HOME", HF_HOME)
+        os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+        torch.set_num_threads(max(1, min(4, os.cpu_count() or 1)))
+        print(f"[OwnedLM] Loading {MODEL_ID} on {DEVICE} ({DTYPE})", flush=True)
+        tokenizer = AutoTokenizer.from_pretrained(
+            MODEL_ID,
+            trust_remote_code=True,
+        )
+        model = AutoModelForCausalLM.from_pretrained(
+            MODEL_ID,
+            trust_remote_code=True,
+            torch_dtype=DTYPE,
+            low_cpu_mem_usage=True,
+            attn_implementation="eager",
+        )
+        model.to(DEVICE)
+        model.eval()
+        with MODEL_LOCK:
+            TOKENIZER = tokenizer
+            MODEL = model
+            MODEL_ERROR = ""
+        print("[OwnedLM] Pretrained model loaded successfully.", flush=True)
+    except Exception as exc:
+        with MODEL_LOCK:
+            MODEL_ERROR = f"{type(exc).__name__}: {exc}"
+        print(f"[OwnedLM] Model load failed: {MODEL_ERROR}", flush=True)
+    finally:
+        with MODEL_LOCK:
+            MODEL_LOADING = False
+
+
+def begin_model_load() -> None:
+    threading.Thread(target=load_model, name="ownedlm-model-loader", daemon=True).start()
+
+
+def _clean_output(text: str) -> str:
+    for marker in ("<|begin_of_thought|>", "<ifm|think>", "<|begin_of_solution|>"):
+        if marker in text:
+            text = text.rsplit(marker, 1)[-1]
+    for marker in ("<|end_of_thought|>", "<|end_of_solution|>", "</ifm|think>", "<|ifm|im_end|>", "<|eot_id|>", "<|endoftext|>"):
+        text = text.split(marker, 1)[0]
+    return text.strip()
+
+
+def generate_reply(payload: dict) -> str:
+    model, tokenizer = MODEL, TOKENIZER
+    if model is None or tokenizer is None:
+        raise RuntimeError("النموذج ما زال قيد التحميل أو تعذّر تحميله.")
+    raw_messages = payload.get("messages")
+    messages = []
+    if isinstance(raw_messages, list):
+        for item in raw_messages[-MAX_HISTORY_MESSAGES:]:
+            if not isinstance(item, dict):
+                continue
+            role, content = item.get("role"), item.get("content")
+            if role not in ("user", "assistant") or not isinstance(content, str):
+                continue
+            content = content.strip()
+            if content and len(content) <= MAX_PROMPT_CHARS:
+                messages.append({"role": role, "content": content})
+    if not messages:
+        prompt = payload.get("message", "")
+        if not isinstance(prompt, str) or not prompt.strip():
+            raise ValueError("اكتب رسالة أولاً.")
+        messages = [{"role": "user", "content": prompt.strip()}]
+    if not any(m["role"] == "user" for m in messages):
+        raise ValueError("رسالة المستخدم غير موجودة.")
+    messages.insert(0, {"role": "system", "content": SYSTEM_PROMPT})
+
+    inputs = tokenizer.apply_chat_template(
+        messages,
+        tokenize=True,
+        add_generation_prompt=True,
+        return_tensors="pt",
+        return_dict=True,
+    )
+    inputs = {key: value.to(DEVICE) for key, value in inputs.items() if isinstance(value, torch.Tensor)}
+    prompt_tokens = inputs["input_ids"].shape[-1]
+    try:
+        max_new_tokens = int(payload.get("max_new_tokens", 256))
+    except (TypeError, ValueError):
+        max_new_tokens = 256
+    max_new_tokens = max(32, min(max_new_tokens, MAX_NEW_TOKENS))
+    with torch.inference_mode():
+        output = model.generate(
+            **inputs,
+            max_new_tokens=max_new_tokens,
+            do_sample=True,
+            temperature=0.7,
+            top_p=0.9,
+            top_k=40,
+            repetition_penalty=1.08,
+            use_cache=True,
+            pad_token_id=tokenizer.eos_token_id,
+            eos_token_id=tokenizer.eos_token_id,
+        )
+    answer = tokenizer.decode(output[0, prompt_tokens:], skip_special_tokens=True)
+    answer = _clean_output(answer)
+    return answer or "لم أتمكن من صياغة إجابة واضحة. أعد صياغة سؤالك من فضلك."
 
 
 class OwnedLMHandler(BaseHTTPRequestHandler):
-    server_version = "OwnedLM/1.0"
+    server_version = "OwnedLM/2.0"
 
     def log_message(self, fmt: str, *args: object) -> None:
         print(f"[OwnedLM] {self.address_string()} - {fmt % args}")
@@ -56,7 +175,6 @@ class OwnedLMHandler(BaseHTTPRequestHandler):
             self._send_json(404, {"error": "المسار غير موجود."})
             return
         if not candidate.is_file():
-            # Client-side routes should load the single-page app entry point.
             candidate = WEB_ROOT / "index.html"
         if not candidate.is_file():
             self._send_json(404, {"error": "ملف الواجهة غير موجود."})
@@ -75,21 +193,17 @@ class OwnedLMHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         path = urlparse(self.path).path
         if path == "/api/status":
-            ready = CHECKPOINT.is_file()
-            self._send_json(
-                200,
-                {
-                    "ready": ready,
-                    "engine": "local-pytorch",
-                    "checkpoint": "checkpoints/tiny.pt",
-                    "message": (
-                        "النموذج التجريبي جاهز للتوليد."
-                        if ready
-                        else "لا توجد نقطة حفظ للنموذج داخل النشر بعد؛ الواجهة تعمل لكن الدردشة غير جاهزة."
-                    ),
-                    "bootstrap_error": BOOTSTRAP_ERROR,
-                },
-            )
+            with MODEL_LOCK:
+                ready, loading, error = MODEL is not None, MODEL_LOADING, MODEL_ERROR
+            self._send_json(200, {
+                "ready": ready,
+                "loading": loading,
+                "engine": "jais-3-local" if ready else "jais-3-loading" if loading else "jais-3-error",
+                "model": MODEL_ID,
+                "device": DEVICE,
+                "message": "محرك OwnedLM الجديد يعمل." if ready else "يجري تجهيز النموذج لأول مرة..." if loading else "تعذّر تحميل النموذج.",
+                "error": error or None,
+            })
             return
         if path.startswith("/api/"):
             self._send_json(404, {"error": "المسار غير موجود."})
@@ -100,10 +214,8 @@ class OwnedLMHandler(BaseHTTPRequestHandler):
         if urlparse(self.path).path != "/api/chat":
             self._send_json(404, {"error": "المسار غير موجود."})
             return
-
-        raw_length = self.headers.get("Content-Length", "")
         try:
-            length = int(raw_length)
+            length = int(self.headers.get("Content-Length", "0"))
         except ValueError:
             self._send_json(400, {"error": "طول الطلب غير صالح."})
             return
@@ -115,124 +227,41 @@ class OwnedLMHandler(BaseHTTPRequestHandler):
         except (UnicodeDecodeError, json.JSONDecodeError):
             self._send_json(400, {"error": "أرسل طلب JSON صالحاً."})
             return
-        prompt = payload.get("message") if isinstance(payload, dict) else None
-        if not isinstance(prompt, str) or not prompt.strip():
-            self._send_json(400, {"error": "اكتب رسالة أولاً."})
+        if not isinstance(payload, dict):
+            self._send_json(400, {"error": "صيغة الطلب غير صالحة."})
             return
-        prompt = prompt.strip()
-        if len(prompt) > MAX_PROMPT_CHARS:
-            self._send_json(413, {"error": f"الرسالة طويلة؛ الحد {MAX_PROMPT_CHARS} حرف."})
-            return
-        if not CHECKPOINT.is_file():
-            self._send_json(
-                503,
-                {"error": "النموذج غير موجود على الخادم بعد؛ يجب توفير checkpoints/tiny.pt قبل تفعيل الدردشة."},
-            )
+        if MODEL is None:
+            with MODEL_LOCK:
+                loading, error = MODEL_LOADING, MODEL_ERROR
+            self._send_json(503, {
+                "error": "النموذج قيد التحميل، انتظر قليلاً ثم أعد الإرسال." if loading else "تعذّر تحميل النموذج. راجع سجل النشر.",
+                "loading": loading,
+                "detail": error or None,
+            })
             return
         try:
-            max_new_tokens = int(payload.get("max_new_tokens", 32))
-        except (TypeError, ValueError):
-            max_new_tokens = 32
-        max_new_tokens = max(1, min(max_new_tokens, MAX_NEW_TOKENS))
-        try:
-            # Limit CPU thread fan-out on small shared hosting instances.
-            # This model is tiny; excessive PyTorch threads can make it slower.
-            torch.set_num_threads(max(1, min(2, os.cpu_count() or 1)))
-            generated = generate(
-                SimpleNamespace(
-                    checkpoint=str(CHECKPOINT),
-                    prompt=prompt,
-                    max_new_tokens=max_new_tokens,
-                    temperature=0.8,
-                    top_k=20,
-                    seed=None,
-                    device="cpu",
-                    stop_at_eos=True,
-                ),
-                include_prompt=False,
-            )
+            answer = generate_reply(payload)
+        except ValueError as exc:
+            self._send_json(400, {"error": str(exc)})
+            return
         except Exception as exc:
-            print(f"[OwnedLM] generation error: {type(exc).__name__}: {exc}")
-            self._send_json(500, {"error": "تعذّر توليد النص. راجع سجل خادم Python."})
+            print(f"[OwnedLM] generation error: {type(exc).__name__}: {exc}", flush=True)
+            self._send_json(500, {"error": "حدث خطأ أثناء التوليد. راجع سجل الخادم."})
             return
-        self._send_json(
-            200,
-            {
-                "reply": generated.strip() or "النموذج لم يولّد تتمة واضحة لهذه الرسالة.",
-                "engine": "local-pytorch",
-                "note": "تتمة نصية من نموذج تجريبي صغير، وليست إجابة موثوقة مثل المساعدات الكبيرة.",
-            },
-        )
-
-
-def _ensure_checkpoint() -> None:
-    """Create a tiny local checkpoint when deployment did not include one."""
-    if CHECKPOINT.is_file() and CHECKPOINT.stat().st_size > 0:
-        return
-
-    print("[OwnedLM] No usable checkpoint found; training a tiny bootstrap model.")
-    command = [
-        sys.executable,
-        str(ROOT / "train.py"),
-        "--data", str(ROOT / "data" / "corpus"),
-        "--preset", "tiny",
-        "--steps", os.environ.get("OWNEDLM_BOOTSTRAP_STEPS", "20"),
-        "--batch-size", "2",
-        "--seq-len", "64",
-        "--log-every", "20",
-        "--save-every", "20",
-        "--out", str(CHECKPOINT),
-        "--device", "cpu",
-    ]
-    try:
-        subprocess.run(command, cwd=ROOT, check=True, timeout=240)
-        if not CHECKPOINT.is_file() or CHECKPOINT.stat().st_size == 0:
-            raise RuntimeError("training finished without a non-empty checkpoint")
-        print(f"[OwnedLM] Bootstrap checkpoint created ({CHECKPOINT.stat().st_size} bytes).")
-    except Exception as exc:
-        global BOOTSTRAP_ERROR
-        BOOTSTRAP_ERROR = f"{type(exc).__name__}: {exc}"
-        print(f"[OwnedLM] Bootstrap training failed: {BOOTSTRAP_ERROR}")
-        # Last-resort checkpoint: keep the API usable even if short bootstrap
-        # training fails in a restricted hosting environment. This fallback
-        # is randomly initialized and must not be presented as a trained model.
-        try:
-            documents = load_text_files(ROOT / "data" / "corpus")
-            texts = [text for _name, text in documents]
-            if not texts:
-                raise RuntimeError("no training text files found")
-            tokenizer = CharTokenizer.from_texts(texts)
-            cfg = config_from_preset("tiny", tokenizer.vocab_size, pad_id=tokenizer.pad_id)
-            model = TinyLM(cfg)
-            CHECKPOINT.parent.mkdir(parents=True, exist_ok=True)
-            torch.save(
-                {
-                    "format": 1,
-                    "step": 0,
-                    "config": cfg.to_dict(),
-                    "tokenizer": tokenizer.to_dict(),
-                    "model": model.state_dict(),
-                },
-                CHECKPOINT,
-            )
-            if not CHECKPOINT.is_file() or CHECKPOINT.stat().st_size == 0:
-                raise RuntimeError("fallback checkpoint was not saved")
-            print(
-                f"[OwnedLM] Created fallback checkpoint ({CHECKPOINT.stat().st_size} bytes); "
-                "weights are untrained."
-            )
-        except Exception as fallback_exc:
-            BOOTSTRAP_ERROR += (
-                f"; fallback failed: {type(fallback_exc).__name__}: {fallback_exc}"
-            )
-            print(f"[OwnedLM] Fallback checkpoint failed: {fallback_exc}")
+        self._send_json(200, {
+            "reply": answer,
+            "engine": "jais-3-local",
+            "model": MODEL_ID,
+            "note": "توليد محلي من الأوزان المحمّلة داخل الخادم.",
+        })
 
 
 def main() -> None:
-    _ensure_checkpoint()
+    Path(HF_HOME).mkdir(parents=True, exist_ok=True)
+    begin_model_load()
     server = ThreadingHTTPServer((HOST, PORT), OwnedLMHandler)
-    print(f"OwnedLM server listening on http://{HOST}:{PORT}")
-    print(f"Checkpoint: {CHECKPOINT}")
+    print(f"OwnedLM server listening on http://{HOST}:{PORT}", flush=True)
+    print(f"Model: {MODEL_ID}; cache: {HF_HOME}", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
