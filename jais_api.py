@@ -16,7 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-MODEL_ID = os.getenv("JAIS_MODEL_ID", "Dhunun/Jais-3.0.9B")
+MODEL_ID = os.getenv("JAIS_MODEL_ID", "Dhunun/OwnedLM-Jais-3-0.9B")
 ADAPTER_ID = os.getenv("JAIS_ADAPTER_ID", "").strip()
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 DTYPE = (torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16) if DEVICE.type == "cuda" else torch.float32
