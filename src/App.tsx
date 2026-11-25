@@ -6,7 +6,7 @@ type Message = {
   content: string;
 };
 
-type ApiStatus = "checking" | "ready" | "needs-checkpoint" | "offline";
+type ApiStatus = "checking" | "loading" | "ready" | "error" | "offline";
 
 const TRAIN_COMMAND =
   "python train.py --data data/corpus --preset tiny --steps 200 --val-ratio 0.5 --out checkpoints/tiny.pt";
@@ -22,23 +22,28 @@ export default function App() {
 
   useEffect(() => {
     let active = true;
-    fetch("/api/status")
-      .then(async (response) => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const check = async () => {
+      try {
+        const response = await fetch("/api/status");
         if (!response.ok) throw new Error("status request failed");
-        return (await response.json()) as { ready: boolean; message: string };
-      })
-      .then((data) => {
+        const data = (await response.json()) as {
+          ready: boolean; loading: boolean; message: string; error?: string | null;
+        };
         if (!active) return;
-        setStatus(data.ready ? "ready" : "needs-checkpoint");
-        setStatusMessage(data.message);
-      })
-      .catch(() => {
+        setStatus(data.ready ? "ready" : data.loading ? "loading" : "error");
+        setStatusMessage(data.ready ? data.message : data.loading ? data.message : (data.error || data.message));
+        if (data.loading) timer = setTimeout(check, 10000);
+      } catch {
         if (!active) return;
         setStatus("offline");
-        setStatusMessage("خادم Python مو شغّال. شغّل python server.py بطرفية ثانية.");
-      });
+        setStatusMessage("تعذّر الاتصال بخادم النموذج.");
+      }
+    };
+    void check();
     return () => {
       active = false;
+      if (timer) clearTimeout(timer);
     };
   }, []);
 
@@ -59,10 +64,13 @@ export default function App() {
     setBusy(true);
 
     try {
+      const conversation = [...messages, { id: userId, role: "user" as const, content: prompt }]
+        .slice(-16)
+        .map(({ role, content }) => ({ role, content }));
       const response = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: prompt, max_new_tokens: 80 }),
+        body: JSON.stringify({ message: prompt, messages: conversation, max_new_tokens: 256 }),
       });
       const data = (await response.json()) as { reply?: string; error?: string };
       if (!response.ok) throw new Error(data.error || "فشل طلب التوليد.");
@@ -92,8 +100,9 @@ export default function App() {
 
   const statusLabel: Record<ApiStatus, string> = {
     checking: "جاري الفحص",
+    loading: "تحميل النموذج",
     ready: "النموذج جاهز",
-    "needs-checkpoint": "بانتظار التدريب",
+    error: "تعذّر تحميل النموذج",
     offline: "الخادم غير متصل",
   };
 
@@ -104,7 +113,7 @@ export default function App() {
           <div className="brand-mark" aria-hidden="true">O</div>
           <div>
             <h1>OwnedLM</h1>
-            <p>نموذجك، من الصفر</p>
+            <p>مساعدك العربي المستقل</p>
           </div>
         </div>
 
@@ -120,17 +129,15 @@ export default function App() {
           <span className="eyebrow">عن النموذج</span>
           <h2>محلي ومفتوح للتطوير</h2>
           <p>
-            التوليد يعمل بواسطة Python وPyTorch من ملف الأوزان الموجود عندك. لا توجد
-            اتصالات بـ ChatGPT أو Grok أو واجهات نماذج خارجية.
+            يعمل بمحرك Jais-3-0.9B محلياً داخل خادم OwnedLM. لا يستخدم واجهة استدلال خارجية.
           </p>
         </section>
 
         <section className="side-section setup-card">
-          <span className="eyebrow">أول تشغيل</span>
-          <h2>درّب النموذج</h2>
-          <p>إذا ما عندك checkpoint، شغّل هذا الأمر من مجلد المشروع:</p>
-          <pre>{TRAIN_COMMAND}</pre>
-          <p className="small-note">النصوص الحالية قليلة؛ التدريب لا يضمن إجابات مفهومة.</p>
+          <span className="eyebrow">محرك اللغة</span>
+          <h2>Jais-3 · 0.9B</h2>
+          <p>أوزان مدرّبة مسبقاً مع Tokenizer خاص، وتُحمّل على الخادم عند بدء التشغيل.</p>
+          <p className="small-note">أول تشغيل قد يستغرق وقتاً لتنزيل نحو 2.16 جيجابايت من الأوزان.</p>
         </section>
 
         <div className="sidebar-footer">نسخة تجريبية · لا تعتمد على المخرجات كمعلومات مؤكدة<br /><span>تطوير: ذنون</span></div>
@@ -146,8 +153,7 @@ export default function App() {
         </header>
 
         <div className="notice" role="note">
-          هذا نموذج لغوي صغير يكمل النص، وليس مساعداً مدرّباً على اتباع التعليمات. كل رسالة
-          تُرسل وحدها؛ سجل المحادثة لا يُستخدم كسياق للتوليد بعد.
+          المحادثة تستخدم النموذج المدرّب مسبقاً، وترسل آخر الرسائل كسياق حتى يفهم تسلسل الحوار.
         </div>
 
         <div className="messages" aria-live="polite">
@@ -182,13 +188,13 @@ export default function App() {
             id="prompt"
             value={input}
             onChange={(event) => setInput(event.target.value)}
-            placeholder="اكتب بداية نص حتى يحاول النموذج يكمله..."
+            placeholder="اكتب رسالتك إلى OwnedLM..."
             rows={2}
             maxLength={2000}
             disabled={busy}
           />
           <div className="composer-footer">
-            <span>حتى 2000 حرف · التوليد محلي</span>
+            <span>المحادثة بالعربية · التوليد محلي</span>
             <button type="submit" disabled={busy || !input.trim()}>
               {busy ? "لحظة..." : "إرسال"}
               <span aria-hidden="true"> ←</span>
