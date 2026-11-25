@@ -167,6 +167,7 @@ def math_isfinite(value: float) -> bool:
 def _args(data: Path, out: Path, steps: int) -> Namespace:
     return Namespace(
         data=str(data),
+        validation_data="",
         preset="tiny",
         tokenizer_type="bpe",
         vocab_size=512,
