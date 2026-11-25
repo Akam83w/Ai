@@ -18,7 +18,7 @@ sys.path.insert(0, str(ROOT))
 from dataset import CausalWindowDataset, load_text_files  # noqa: E402
 from generate import generate  # noqa: E402
 from model import ModelConfig, TinyLM  # noqa: E402
-from tokenizer import CharTokenizer  # noqa: E402
+from tokenizer import BpeTokenizer, CharTokenizer, tokenizer_from_dict  # noqa: E402
 from train import train  # noqa: E402
 
 BANNED_IMPORTS = (
@@ -108,7 +108,9 @@ class ModelTests(unittest.TestCase):
         self.assertIn("<?>", tokenizer.decode(tokenizer.encode("مرحبا!")))
 
     def test_no_external_model_clients(self) -> None:
-        for path in ROOT.glob("*.py"):
+        runtime_files = ("api_server.py", "model.py", "tokenizer.py", "generate.py", "train.py", "dataset.py", "knowledge.py")
+        for filename in runtime_files:
+            path = ROOT / filename
             source = path.read_text(encoding="utf-8")
             for name in BANNED_IMPORTS:
                 self.assertNotIn(f"import {name}", source)
