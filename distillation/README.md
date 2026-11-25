@@ -1,38 +1,87 @@
-# Arabic distillation from Jais
+# Arabic learning and distillation pipeline
 
-This directory defines a repeatable way to ask the project's Jais teacher for Arabic learning material.
+This pipeline uses the project's locally hosted Jais-3 teacher to generate Arabic-only learning material for the OwnedLM project.
 
-## What this does
+## Teacher model
 
-- Builds a broad Arabic-first curriculum: grammar, morphology, vocabulary, writing, comprehension, Iraqi conversation, basic sciences, history, logic, and practical tasks.
-- Calls the project's existing Jais-compatible API and saves generated examples as JSONL plus plain UTF-8 text.
-- Keeps generated data local under `data/private/` by default.
+- Project checkpoint: `Dhunun/Jais-3.0.9B` (private Hugging Face repository).
+- Upstream base: `inception42/Jais-3-0.9B`.
+- Architecture: K2 Horizon, approximately 1.078B parameters; the current safetensors file is about 2.16 GB.
+- The upstream model card declares Apache-2.0. Keep the upstream license, copyright notices, and attribution with redistributed model code or weights.
+- Runtime generation is performed by the project's own Jais API. Do not call a hosted external inference API.
 
-It does **not** extract hidden knowledge, copy model parameters, or make the tiny randomly initialized OwnedLM instantly fluent. It creates teacher-generated training material. The student must still be upgraded and trained on a suitable compute machine.
+## Curriculum scope
 
-## Run
+The curriculum is Modern Standard Arabic only. It covers phonetics, spelling, grammar, morphology, semantics, rhetoric, reading comprehension, writing, conversation, literature, translation, mathematics, natural sciences, computing, history, geography, economics, reasoning, and teaching/evaluation. Regional dialect tasks are intentionally excluded.
 
-Start the Jais API using the instructions in [JAIS-SETUP.md](../JAIS-SETUP.md), then run:
+## 1. Generate teacher examples
 
-```bash
-python distillation/generate_teacher_data.py --base-url http://127.0.0.1:8000
-```
-
-For a small test:
+Start the local teacher API:
 
 ```bash
-python distillation/generate_teacher_data.py --limit 3 --samples-per-task 1
+pip install -r requirements-jais.txt
+JAIS_MODEL_ID=Dhunun/Jais-3.0.9B python jais_api.py
 ```
 
-The default curriculum currently contains 40+ task prompts. Use `--samples-per-task 5` to request more variations. Generation requires a running Jais inference server; GitHub itself does not run the model.
+Keep any Hugging Face token in the runtime's secret manager or environment; never commit it.
 
-## Output
+Generate a small smoke-test batch:
 
-- `data/private/jais_arabic_distilled.jsonl`: prompt/response records with topic labels.
-- `data/private/jais_arabic_distilled.txt`: concatenated Arabic training text.
+```bash
+python distillation/generate_teacher_data.py --limit 4 --samples-per-task 1
+```
 
-Do not commit private or very large generated corpora to Git. Keep source/license records for every dataset. Jais-derived outputs and any redistributed derived weights must follow the applicable model license and attribution terms. Review generated material for factual errors, repetition, dialect quality, and contamination before training.
+Generate the complete curriculum with several variations:
 
-## Next engineering stage
+```bash
+python distillation/generate_teacher_data.py --samples-per-task 3 --pause 0.5
+```
 
-The current OwnedLM uses a character tokenizer and a very small randomly initialized Transformer. A serious Arabic student needs a subword tokenizer (for example, BPE trained on permitted Arabic text), a larger context/model configuration, a supervised fine-tuning or continued-pretraining pipeline, and held-out Arabic evaluation. Do not overwrite the original model until the new training path passes tests.
+Output is appended under `data/private/` by default. It is not committed to Git.
+
+## 2. Validate and split the dataset
+
+```bash
+python distillation/prepare_sft_dataset.py \
+  --input data/private/jais_arabic_distilled.jsonl \
+  --output-dir data/private/arabic_sft \
+  --validation-ratio 0.05
+```
+
+This removes malformed, empty, too-short, and exact duplicate records, then makes a deterministic train/validation split. Review generated facts before training.
+
+## 3. Fine-tune the Jais-3 base with LoRA
+
+The current tiny randomly initialized OwnedLM Transformer cannot absorb Jais weights: its architecture and tokenizer are incompatible. The fast, technically valid path is to use the Jais-3 weights as the Arabic-capable base, then fine-tune that base for the project's behavior with LoRA. The adapter is the project's customization; it is not a full pretraining run.
+
+Install optional training dependencies:
+
+```bash
+pip install -r requirements-jais-train.txt
+```
+
+Run on a CUDA GPU:
+
+```bash
+python distillation/train_jais_lora.py \
+  --model-id Dhunun/Jais-3.0.9B \
+  --train-file data/private/arabic_sft/train.jsonl \
+  --validation-file data/private/arabic_sft/validation.jsonl \
+  --output-dir adapters/ownedlm-arabic-v1
+```
+
+Use `--max-length`, `--batch-size`, and `--gradient-accumulation` to fit available VRAM. The script saves adapter weights separately and does not overwrite the original teacher checkpoint.
+
+## What is and is not transferred
+
+- The Jais checkpoint already contains its pretrained Arabic and general-language capabilities.
+- Teacher generation creates new prompt/answer examples from the model's visible outputs; it does not extract hidden training data or copy the full internal knowledge into the old tiny model.
+- LoRA fine-tuning adapts the Jais base into the project's own checkpoint lineage while preserving the original base weights.
+- Keep training and validation sets separate. Never mark generated examples as verified facts without review.
+- Do not commit model weights, private generated data, tokens, or user conversations to the public Git repository.
+
+## References
+
+- Upstream model: https://huggingface.co/inception42/Jais-3-0.9B
+- Project checkpoint: https://huggingface.co/Dhunun/Jais-3.0.9B
+- License: https://www.apache.org/licenses/LICENSE-2.0
