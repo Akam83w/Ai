@@ -200,7 +200,20 @@ def training_data(x_admin_token: str | None = Header(default=None)):
         lines.append(f"{speaker}: {content}")
     return "\n".join(lines) + ("\n" if lines else "")
 
-@app.delete("/v1/conversations/{session_id}")\ndef delete_conversation(session_id: str):\n    if not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", session_id):\n        raise HTTPException(status_code=400, detail="Invalid session id")\n    try:\n        with db_connection() as conn:\n            cur = conn.cursor()\n            cur.execute("DELETE FROM conversation_messages WHERE session_id = %s" if DATABASE_URL.startswith(("postgres://", "postgresql://")) else "DELETE FROM conversation_messages WHERE session_id = ?", (session_id,))\n            deleted = cur.rowcount\n        return {"deleted": True, "deleted_messages": deleted}\n    except Exception as exc:\n        raise HTTPException(status_code=503, detail=f"Database delete failed: {type(exc).__name__}")\n\n@app.post("/v1/chat/completions")
+@app.delete("/v1/conversations/{session_id}")
+def delete_conversation(session_id: str):
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", session_id):
+        raise HTTPException(status_code=400, detail="Invalid session id")
+    try:
+        with db_connection() as conn:
+            cur = conn.cursor()
+            cur.execute("DELETE FROM conversation_messages WHERE session_id = %s" if DATABASE_URL.startswith(("postgres://", "postgresql://")) else "DELETE FROM conversation_messages WHERE session_id = ?", (session_id,))
+            deleted = cur.rowcount
+        return {"deleted": True, "deleted_messages": deleted}
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"Database delete failed: {type(exc).__name__}")
+
+@app.post("/v1/chat/completions")
 def chat(req: ChatRequest):
     prompt_text = build_dialogue(req.messages, 120)
     model, tok = load_checkpoint()
