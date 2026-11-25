@@ -225,6 +225,10 @@ updates. Review and filter them before training; do not train on private,
 sensitive, abusive, or low-quality content. A training run and deployment of
 its checkpoint are still required before the model's weights change.
 
+## Current pretrained Arabic runtime
+
+The main FastAPI service now loads the copied Jais-3-0.9B checkpoint as the OwnedLM inference engine. It no longer generates chat replies with the randomly initialized TinyLM. The model files are hosted at https://huggingface.co/Dhunun/OwnedLM-Jais-3-0.9B and are downloaded and cached locally by the runtime; this is local inference, not a remote inference API. The Docker deployment uses requirements-jais.txt and needs persistent storage mounted at /data. On CPU, allow several gigabytes of RAM and expect slower generation; GPU acceleration is preferred when available.
+
 ## Arabic-first Jais-3 training path
 
 For the project's Arabic-only pretrained base, teacher-generated learning curriculum, validated SFT dataset, and LoRA customization workflow, see [JAIS-SETUP.md](JAIS-SETUP.md) and [distillation/README.md](distillation/README.md). This path uses the project's private Jais-3 checkpoint as a locally hosted base; the older tiny from-scratch Transformer remains a separate experimental implementation and cannot directly load Jais weights. Generated Arabic training data and adapter/model files stay outside the public Git repository.
