@@ -86,14 +86,16 @@ def load_model() -> None:
         # the lightweight web/API process start on small hosting plans.
         import torch as torch_module
         from transformers import AutoModelForCausalLM as model_class, AutoTokenizer as tokenizer_class
+        if torch_module is None or not callable(getattr(torch_module, "set_num_threads", None)):
+            raise RuntimeError("PyTorch لم يُحمّل بصورة صحيحة؛ تعذّر تهيئة عدد خيوط المعالجة.")
+        DEVICE = "cuda" if torch_module.cuda.is_available() else "cpu"
+        DTYPE = torch_module.bfloat16 if DEVICE == "cpu" else (
+            torch_module.bfloat16 if torch_module.cuda.is_bf16_supported() else torch_module.float16
+        )
+        torch_module.set_num_threads(max(1, min(2, os.cpu_count() or 1)))
         torch = torch_module
         AutoModelForCausalLM = model_class
         AutoTokenizer = tokenizer_class
-        DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-        DTYPE = torch.bfloat16 if DEVICE == "cpu" else (
-            torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
-        )
-        torch.set_num_threads(max(1, min(2, os.cpu_count() or 1)))
         print(f"[OwnedLM] Loading {MODEL_ID} on {DEVICE} ({DTYPE})", flush=True)
         tokenizer = AutoTokenizer.from_pretrained(
             MODEL_ID,
