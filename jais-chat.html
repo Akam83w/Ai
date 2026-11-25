@@ -2,7 +2,7 @@
 <html lang="ar" dir="rtl">
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="theme-color" content="#101827"><title>Jais – Dhunun</title>
+<meta name="theme-color" content="#101827"><title>OwnedLM – نموذجك العربي</title>
 <style>
 :root{color-scheme:dark;--bg:#0b1220;--panel:#111c2e;--line:#26354b;--muted:#9aabc2;--accent:#58c6a9}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:#edf4ff;font-family:system-ui,-apple-system,"Segoe UI",sans-serif;height:100dvh;display:flex;justify-content:center}
@@ -14,23 +14,25 @@ h1{font-size:17px;margin:0}header small{color:var(--muted)}
 #chat{flex:1;overflow:auto;padding:20px;display:flex;flex-direction:column;gap:14px}
 .welcome{margin:auto;text-align:center;color:var(--muted);max-width:420px;line-height:1.8}.welcome strong{display:block;color:#edf4ff;font-size:22px;margin-bottom:8px}
 .msg{max-width:86%;padding:12px 15px;border-radius:17px;white-space:pre-wrap;line-height:1.75;overflow-wrap:anywhere}
-.user{align-self:flex-start;background:#214b49;border-bottom-right-radius:5px}.assistant{align-self:flex-end;background:#1a2940;border:1px solid var(--line);border-bottom-left-radius:5px}
+.user{align-self:flex-start;background:#214b49;border-bottom-right-radius:5px}.assistant{align-self:flex-end;background:#1a2940;border:1px solid var(--line)}
 form{padding:14px;border-top:1px solid var(--line);display:flex;gap:9px;background:#0e1828}
 textarea{resize:none;flex:1;min-height:48px;max-height:130px;border:1px solid var(--line);border-radius:14px;background:#152238;color:white;padding:13px;font:inherit;outline:none}
 button{border:0;border-radius:14px;background:var(--accent);color:#06251e;font-weight:800;padding:0 20px;font:inherit;cursor:pointer}button:disabled{opacity:.5}
 footer{padding:0 16px 10px;color:var(--muted);font-size:11px;text-align:center}
 </style></head>
 <body><main class="app">
-<header><div class="logo">J</div><div><h1>Jais – Dhunun</h1><small>مساحة المحادثة الخاصة بنموذجك</small></div><span id="status">جاهز</span></header>
-<section id="chat" aria-live="polite"><div class="welcome" id="welcome"><strong>هلا بيك 👋</strong>ابدأ محادثتك ويا Jais – Dhunun</div></section>
+<header><div class="logo">ع</div><div><h1>OwnedLM</h1><small>مساحة المحادثة الخاصة بنموذجك العربي</small></div><span id="status">يفحص الاتصال...</span></header>
+<section id="chat" aria-live="polite"><div class="welcome" id="welcome"><strong>هلا بيك 👋</strong>ابدأ محادثتك ويا نموذجك</div></section>
 <form id="form"><textarea id="input" rows="1" placeholder="اكتب رسالتك هنا..." required></textarea><button id="send" type="submit">إرسال</button></form>
-<footer>الردود تأتي من النموذج المتصل، وليست ردوداً محفوظة.</footer>
+<footer id="foot">الردود من خادم نموذجك المستقل.</footer>
 </main>
 <script>
-const API = new URLSearchParams(location.search).get('api') || 'http://127.0.0.1:8000';
-const chat=document.querySelector('#chat'),form=document.querySelector('#form'),input=document.querySelector('#input'),send=document.querySelector('#send'),status=document.querySelector('#status');
+const API = location.origin;
+const chat=document.querySelector('#chat'),form=document.querySelector('#form'),input=document.querySelector('#input'),send=document.querySelector('#send'),status=document.querySelector('#status'),foot=document.querySelector('#foot');
 const messages=[];
 function bubble(role,content){document.querySelector('#welcome')?.remove();const el=document.createElement('div');el.className='msg '+(role==='user'?'user':'assistant');el.textContent=content;chat.appendChild(el);chat.scrollTop=chat.scrollHeight;return el}
-form.addEventListener('submit',async e=>{e.preventDefault();const content=input.value.trim();if(!content||send.disabled)return;messages.push({role:'user',content});bubble('user',content);input.value='';send.disabled=true;status.textContent='Jais يفكر...';const pending=bubble('assistant','...');try{const response=await fetch(API+'/v1/chat/completions',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({messages,max_new_tokens:512,temperature:.7,top_p:.95})});const data=await response.json();if(!response.ok)throw new Error(data.detail||'تعذر الاتصال بالنموذج');const answer=data.choices?.[0]?.message?.content;if(!answer)throw new Error('النموذج لم يرجع إجابة');pending.textContent=answer;messages.push({role:'assistant',content:answer});status.textContent='متصل';}catch(err){pending.textContent='ما كدرت أتصل بالنموذج: '+err.message;status.textContent='غير متصل';messages.pop();}finally{send.disabled=false;input.focus()}});
+async function checkHealth(){try{const r=await fetch(API+'/health');if(!r.ok)throw Error('health');const h=await r.json();status.textContent=h.model_loaded?'متصل — النموذج محمّل':'متصل — وضع التشغيل الأولي';foot.textContent=h.model_loaded?'النموذج المدرّب يعمل على خادمك.':'الخادم يعمل؛ لم تُرفع أوزان مدرّبة بعد، والردود الحالية أولية.';}catch(e){status.textContent='غير متصل';foot.textContent='تعذّر الوصول إلى خادم النموذج.'}}
+form.addEventListener('submit',async e=>{e.preventDefault();const content=input.value.trim();if(!content||send.disabled)return;messages.push({role:'user',content});bubble('user',content);input.value='';send.disabled=true;status.textContent='يعالج الرسالة...';const pending=bubble('assistant','...');try{const response=await fetch(API+'/v1/chat/completions',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({messages,max_new_tokens:100,temperature:.7})});const data=await response.json();if(!response.ok)throw new Error(data.detail||'تعذر تنفيذ الطلب');const answer=data.choices?.[0]?.message?.content;if(!answer)throw new Error('الخادم لم يرجع إجابة');pending.textContent=answer;messages.push({role:'assistant',content:answer});status.textContent=data.mode==='trained_model'?'متصل — النموذج يعمل':'متصل — رد أولي';}catch(err){pending.textContent='تعذّر الحصول على رد: '+err.message;status.textContent='مشكلة اتصال';messages.pop();}finally{send.disabled=false;input.focus()}});
 input.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();form.requestSubmit()}});
+checkHealth();
 </script></body></html>
