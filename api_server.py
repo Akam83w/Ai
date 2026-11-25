@@ -4,12 +4,11 @@ from typing import Literal
 from contextlib import contextmanager
 
 import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, PlainTextResponse
 from pydantic import BaseModel, Field
-from model import ModelConfig, TinyLM
-from tokenizer import tokenizer_from_dict
 from knowledge import retrieve_answer
 
 ROOT = Path(__file__).resolve().parent
@@ -18,8 +17,11 @@ KNOWLEDGE_DIR = Path(os.getenv("OWNEDLM_KNOWLEDGE_DIR", str(ROOT / "data" / "cor
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
 DB_PATH = Path(os.getenv("OWNEDLM_DB_PATH", "/data/ownedlm.sqlite3"))
 ADMIN_TOKEN = os.getenv("OWNEDLM_ADMIN_TOKEN", "")
+JAIS_MODEL_ID = os.getenv("JAIS_MODEL_ID", "Dhunun/OwnedLM-Jais-3-0.9B")
+JAIS_ADAPTER_ID = os.getenv("JAIS_ADAPTER_ID", "").strip()
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-app = FastAPI(title="OwnedLM Arabic Companion API", version="1.3.0")
+DTYPE = (torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16) if DEVICE.type == "cuda" else torch.float32
+app = FastAPI(title="OwnedLM Arabic Companion API", version="2.0.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=False, allow_methods=["GET","POST","DELETE"], allow_headers=["Content-Type","X-Admin-Token"])
 
 class Message(BaseModel):
@@ -29,8 +31,9 @@ class Message(BaseModel):
 class ChatRequest(BaseModel):
     messages: list[Message] = Field(min_length=1, max_length=24)
     session_id: str = Field(min_length=1, max_length=100)
-    max_new_tokens: int = Field(default=100, ge=1, le=256)
+    max_new_tokens: int = Field(default=512, ge=1, le=4096)
     temperature: float = Field(default=0.7, ge=0.05, le=2.0)
+    top_p: float = Field(default=0.95, gt=0.0, le=1.0)
 
 _model = None
 _tokenizer = None
@@ -123,23 +126,37 @@ def home():
 
 def load_checkpoint():
     global _model, _tokenizer, _load_error
-    if _model is not None: return _model, _tokenizer
-    if not CHECKPOINT.is_file():
-        _load_error = f"Checkpoint not found: {CHECKPOINT}"
-        return None, None
+    if _model is not None:
+        return _model, _tokenizer
     try:
         _load_error = None
-        ckpt = torch.load(CHECKPOINT, map_location=DEVICE, weights_only=False)
-        tok = tokenizer_from_dict(ckpt["tokenizer"])
-        cfg = ModelConfig.from_dict(ckpt["config"])
-        net = TinyLM(cfg).to(DEVICE)
-        net.load_state_dict(ckpt["model"])
+        tok = AutoTokenizer.from_pretrained(JAIS_MODEL_ID, trust_remote_code=True)
+        net = AutoModelForCausalLM.from_pretrained(
+            JAIS_MODEL_ID,
+            trust_remote_code=True,
+            torch_dtype=DTYPE,
+            low_cpu_mem_usage=True,
+        )
+        if JAIS_ADAPTER_ID:
+            from peft import PeftModel
+            net = PeftModel.from_pretrained(net, JAIS_ADAPTER_ID)
+        net.to(DEVICE)
         net.eval()
         _model, _tokenizer = net, tok
         return _model, _tokenizer
     except Exception as exc:
         _load_error = f"{type(exc).__name__}: {exc}"
         return None, None
+
+def extract_answer(text: str) -> str:
+    for marker in ("</ifm|think>", "</ifm|think_fast>", "</ifm|think_faster>"):
+        if marker in text:
+            text = text.rsplit(marker, 1)[-1]
+            break
+    for marker in ("<|ifm|im_end|>", "<|endoftext|>", "<|eot_id|>"):
+        if marker in text:
+            text = text.split(marker, 1)[0]
+    return text.strip()
 
 def starter_reply(text: str) -> str:
     s = " ".join(text.strip().lower().split())
@@ -164,25 +181,22 @@ def build_dialogue(messages: list[Message], limit: int) -> str:
 def health():
     model, _ = load_checkpoint()
     db_ok = init_database()
-    checkpoint_exists = CHECKPOINT.is_file()
-    checkpoint_size = CHECKPOINT.stat().st_size if checkpoint_exists else 0
     return {
-        "status": "ok",
+        "status": "ok" if model is not None else "degraded",
         "service": "OwnedLM",
         "device": DEVICE.type,
+        "model_id": JAIS_MODEL_ID,
+        "adapter_id": JAIS_ADAPTER_ID or None,
         "model_loaded": model is not None,
-        "mode": "trained_model" if model is not None else ("checkpoint_invalid" if checkpoint_exists else "checkpoint_missing"),
+        "mode": "jais_pretrained" if model is not None else "model_load_error",
         "database_connected": db_ok,
         "database_type": "postgresql" if DATABASE_URL.startswith(("postgres://", "postgresql://")) else "sqlite",
         "database_error": _db_error,
-        "checkpoint": str(CHECKPOINT),
-        "checkpoint_exists": checkpoint_exists,
-        "checkpoint_size_bytes": checkpoint_size,
         "knowledge_directory": str(KNOWLEDGE_DIR),
         "knowledge_files": len(list(KNOWLEDGE_DIR.rglob("*.txt"))) if KNOWLEDGE_DIR.is_dir() else 0,
-        "model_parameters": model.parameter_count() if model is not None else None,
-        "model_vocab_size": model.cfg.vocab_size if model is not None else None,
-        "model_context_length": model.cfg.max_seq_len if model is not None else None,
+        "model_parameters": sum(p.numel() for p in model.parameters()) if model is not None else None,
+        "model_vocab_size": model.config.vocab_size if model is not None else None,
+        "model_context_length": model.config.max_position_embeddings if model is not None else None,
         "load_error": _load_error
     }
 
@@ -229,28 +243,50 @@ def delete_conversation(session_id: str):
 
 @app.post("/v1/chat/completions")
 def chat(req: ChatRequest):
-    prompt_text = build_dialogue(req.messages, 120)
     user_text = next((m.content for m in reversed(req.messages) if m.role == "user"), "")
     model, tok = load_checkpoint()
 
     # Prefer a high-confidence answer explicitly present in the project's own corpus.
-    # This is retrieval, not a generated or newly learned model response.
     knowledge_match = retrieve_answer(user_text, KNOWLEDGE_DIR)
     if knowledge_match is not None:
         answer, mode = knowledge_match["answer"], "knowledge_retrieval"
     elif model is None:
-        answer, mode = starter_reply(user_text), "starter"
+        answer, mode = starter_reply(user_text), "model_unavailable"
     else:
-        prompt_text = prompt_text[-(model.cfg.max_seq_len - 1):]
-        ids = tok.encode(prompt_text, add_bos=True) or [tok.bos_id]
-        x = torch.tensor([ids], dtype=torch.long, device=DEVICE)
+        messages = [{"role": item.role, "content": item.content} for item in req.messages]
+        if not any(item["role"] == "system" for item in messages):
+            messages.insert(0, {
+                "role": "system",
+                "content": "أنت OwnedLM، مساعد عربي مستقل. أجب باللغة العربية الفصحى المعاصرة فقط، بدقة ووضوح. لا تخترع معلومات عند عدم التأكد."
+            })
+        inputs = tok.apply_chat_template(
+            messages,
+            tokenize=True,
+            add_generation_prompt=True,
+            return_tensors="pt",
+            return_dict=True,
+            reasoning_effort="high",
+        )
+        inputs = {key: value.to(DEVICE) for key, value in inputs.items()}
+        inputs.pop("token_type_ids", None)
         with torch.inference_mode():
-            out = model.generate(x, max_new_tokens=min(req.max_new_tokens,128), temperature=req.temperature, top_k=20, eos_id=tok.eos_id)
-        decoded = tok.decode(out[0].tolist()).strip()
-        answer = decoded[len(prompt_text):].strip() if decoded.startswith(prompt_text) else decoded
+            output = model.generate(
+                **inputs,
+                max_new_tokens=req.max_new_tokens,
+                do_sample=True,
+                temperature=req.temperature,
+                top_p=req.top_p,
+                top_k=20,
+                repetition_penalty=1.0,
+                pad_token_id=tok.eos_token_id,
+            )
+        prompt_length = inputs["input_ids"].shape[-1]
+        generated_text = tok.decode(output[0, prompt_length:], skip_special_tokens=False)
+        answer = extract_answer(generated_text)
         if not answer:
-            answer = "ما كدرت أكمّل الرد من الأوزان الحالية."
-        mode = "trained_model"
+            answer = "لم أتمكن من إنشاء إجابة."
+        mode = "jais_pretrained"
+
     saved = False
     try:
         if user_text:
@@ -259,7 +295,13 @@ def chat(req: ChatRequest):
     except Exception as exc:
         global _db_error
         _db_error = f"{type(exc).__name__}: {exc}"
-    response = {"model":"OwnedLM","mode":mode,"saved_to_database":saved,"choices":[{"message":{"role":"assistant","content":answer}}]}
+    response = {
+        "model": "OwnedLM",
+        "base_model": JAIS_MODEL_ID,
+        "mode": mode,
+        "saved_to_database": saved,
+        "choices": [{"message": {"role": "assistant", "content": answer}}],
+    }
     if knowledge_match is not None:
         response["knowledge_match"] = {
             "source": knowledge_match["source"],
