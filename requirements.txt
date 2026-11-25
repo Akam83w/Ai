@@ -3,3 +3,4 @@ torch==2.2.2+cpu
 fastapi==0.115.6
 uvicorn==0.34.0
 psycopg[binary]==3.2.3
+tokenizers==0.21.0
