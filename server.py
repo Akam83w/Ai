@@ -20,18 +20,40 @@ PORT = int(os.environ.get("PORT", "8080"))
 MODEL_ID = os.environ.get("JAIS_MODEL_ID", "Dhunun/OwnedLM-Jais-3-0.9B")
 HF_HOME = os.environ.get("HF_HOME", "/data/huggingface")
 MAX_BODY_BYTES = 48_000
-MAX_PROMPT_CHARS = 8_000
-MAX_HISTORY_MESSAGES = 16
-MAX_NEW_TOKENS = 512
+MAX_PROMPT_CHARS = 4_000
+MAX_HISTORY_MESSAGES = 12
+MAX_NEW_TOKENS = 128
+MIN_MODEL_RAM_GB = float(os.environ.get("OWNEDLM_MIN_RAM_GB", "4"))
 MODEL = None
 TOKENIZER = None
 MODEL_LOADING = False
 MODEL_ERROR = ""
 MODEL_LOCK = threading.Lock()
+GENERATION_LOCK = threading.Lock()
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 DTYPE = torch.bfloat16 if DEVICE == "cpu" else (
     torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
 )
+
+def container_memory_limit_bytes() -> int | None:
+    """Return the container RAM limit when exposed by cgroups."""
+    candidates = (
+        Path("/sys/fs/cgroup/memory.max"),  # cgroup v2
+        Path("/sys/fs/cgroup/memory/memory.limit_in_bytes"),  # cgroup v1
+    )
+    limits = []
+    for path in candidates:
+        try:
+            raw = path.read_text(encoding="ascii").strip()
+            if raw.isdigit():
+                value = int(raw)
+                # cgroup v1 may report a huge sentinel when unlimited.
+                if 0 < value < (1 << 60):
+                    limits.append(value)
+        except (OSError, ValueError):
+            continue
+    return min(limits) if limits else None
+
 
 SYSTEM_PROMPT = (
     "أنت OwnedLM، مساعد عربي مستقل. أجب باللغة العربية الفصحى المعاصرة فقط. "
@@ -49,7 +71,18 @@ def load_model() -> None:
     try:
         os.environ.setdefault("HF_HOME", HF_HOME)
         os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
-        torch.set_num_threads(max(1, min(4, os.cpu_count() or 1)))
+        torch.set_num_threads(max(1, min(2, os.cpu_count() or 1)))
+        memory_limit = container_memory_limit_bytes()
+        required_bytes = int(MIN_MODEL_RAM_GB * (1024 ** 3))
+        if DEVICE == "cpu" and memory_limit is not None and memory_limit < required_bytes:
+            actual_gb = memory_limit / (1024 ** 3)
+            MODEL_ERROR = (
+                f"ذاكرة الخادم غير كافية لتشغيل النموذج: المتاح للحاوية {actual_gb:.2f} GB، "
+                f"والمطلوب مبدئياً {MIN_MODEL_RAM_GB:.1f} GB على الأقل. "
+                "ارفع حد RAM في منصة الاستضافة أو استخدم نسخة مكمّمة أصغر."
+            )
+            print(f"[OwnedLM] {MODEL_ERROR}", flush=True)
+            return
         print(f"[OwnedLM] Loading {MODEL_ID} on {DEVICE} ({DTYPE})", flush=True)
         tokenizer = AutoTokenizer.from_pretrained(
             MODEL_ID,
@@ -130,10 +163,10 @@ def generate_reply(payload: dict) -> str:
     except (TypeError, ValueError):
         max_new_tokens = 256
     max_new_tokens = max(32, min(max_new_tokens, MAX_NEW_TOKENS))
-    with torch.inference_mode():
+    with GENERATION_LOCK, torch.inference_mode():
         output = model.generate(
             **inputs,
-            max_new_tokens=max_new_tokens,
+            max_new_tokens=min(max_new_tokens, MAX_NEW_TOKENS),
             do_sample=True,
             temperature=0.7,
             top_p=0.9,
