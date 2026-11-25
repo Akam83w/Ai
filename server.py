@@ -71,7 +71,6 @@ def load_model() -> None:
     try:
         os.environ.setdefault("HF_HOME", HF_HOME)
         os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
-        torch.set_num_threads(max(1, min(2, os.cpu_count() or 1)))
         memory_limit = container_memory_limit_bytes()
         required_bytes = int(MIN_MODEL_RAM_GB * (1024 ** 3))
         if DEVICE == "cpu" and memory_limit is not None and memory_limit < required_bytes:
