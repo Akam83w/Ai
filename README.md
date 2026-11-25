@@ -87,3 +87,8 @@ data/private/     بيانات محلية غير متتبعة
 1. أضف نصاً عربياً مرخّصاً وموثّقاً في SOURCES.md (انظر ADDING_DATA.md).
 2. درّب مع `--val-ratio` على ملفات مستقلة، وراقب val_loss لا train_loss وحده.
 3. لا تكبّر النموذج قبل أن تتحسن val_loss على بيانات لم تدخل التدريب.
+
+
+## Pretrained chat runtime (deploy/deplexo)
+
+The deployment branch now serves the React UI with the Jais-3-0.9B checkpoint from `Dhunun/OwnedLM-Jais-3-0.9B`. It loads the weights locally in the container using Transformers 4.57.1 and trusted model code from the Apache-2.0 checkpoint. The chat API accepts the recent conversation messages as context. Configure a persistent volume at `/data` so the Hugging Face cache survives redeployments; first startup downloads about 2.16 GB. CPU inference requires several GB of available RAM and can be slow. Check `/api/status` for loading/ready/error state.
