@@ -50,6 +50,8 @@ def main() -> None:
 
     if args.max_length < 128 or args.batch_size < 1 or args.gradient_accumulation < 1:
         raise SystemExit("max-length must be >=128 and batch/accumulation must be positive")
+    if not torch.cuda.is_available():
+        raise SystemExit("LoRA training requires a CUDA GPU; run this script on a GPU training machine.")
 
     tokenizer = AutoTokenizer.from_pretrained(args.model_id, trust_remote_code=True)
     if tokenizer.pad_token_id is None:
