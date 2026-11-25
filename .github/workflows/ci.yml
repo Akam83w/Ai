@@ -22,3 +22,5 @@ jobs:
         run: python -m compileall -q .
       - name: Run tests
         run: python -m unittest discover -s tests -t . -v
+      - name: Build runtime image
+        run: docker build -t ownedlm-runtime:test .
