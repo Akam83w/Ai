@@ -18,7 +18,7 @@ DB_PATH = Path(os.getenv("OWNEDLM_DB_PATH", "/data/ownedlm.sqlite3"))
 ADMIN_TOKEN = os.getenv("OWNEDLM_ADMIN_TOKEN", "")
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 app = FastAPI(title="OwnedLM Arabic Companion API", version="1.2.0")
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=False, allow_methods=["GET","POST"], allow_headers=["Content-Type","X-Admin-Token"])
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=False, allow_methods=["GET","POST","DELETE"], allow_headers=["Content-Type","X-Admin-Token"])
 
 class Message(BaseModel):
     role: Literal["system", "user", "assistant"]
@@ -200,7 +200,7 @@ def training_data(x_admin_token: str | None = Header(default=None)):
         lines.append(f"{speaker}: {content}")
     return "\n".join(lines) + ("\n" if lines else "")
 
-@app.post("/v1/chat/completions")
+@app.delete("/v1/conversations/{session_id}")\ndef delete_conversation(session_id: str):\n    if not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", session_id):\n        raise HTTPException(status_code=400, detail="Invalid session id")\n    try:\n        with db_connection() as conn:\n            cur = conn.cursor()\n            cur.execute("DELETE FROM conversation_messages WHERE session_id = %s" if DATABASE_URL.startswith(("postgres://", "postgresql://")) else "DELETE FROM conversation_messages WHERE session_id = ?", (session_id,))\n            deleted = cur.rowcount\n        return {"deleted": True, "deleted_messages": deleted}\n    except Exception as exc:\n        raise HTTPException(status_code=503, detail=f"Database delete failed: {type(exc).__name__}")\n\n@app.post("/v1/chat/completions")
 def chat(req: ChatRequest):
     prompt_text = build_dialogue(req.messages, 120)
     model, tok = load_checkpoint()
