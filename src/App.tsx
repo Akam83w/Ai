@@ -69,8 +69,17 @@ export default function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ message: prompt, messages: conversation, max_new_tokens: 256 }),
       });
-      const data = (await response.json()) as { reply?: string; error?: string };
-      if (!response.ok) throw new Error(data.error || "فشل طلب التوليد.");
+      const responseText = await response.text();
+      let data: { reply?: string; error?: string; detail?: string };
+      try {
+        data = JSON.parse(responseText) as { reply?: string; error?: string; detail?: string };
+      } catch {
+        const contentType = response.headers.get("content-type") || "unknown";
+        throw new Error(
+          `الخادم أعاد صفحة غير JSON (HTTP ${response.status}، ${contentType}). تحقق من مسار API وسجل تشغيل الخادم.`,
+        );
+      }
+      if (!response.ok) throw new Error(data.detail || data.error || `فشل طلب التوليد (HTTP ${response.status}).`);
       setMessages((previous) => [
         ...previous,
         {
