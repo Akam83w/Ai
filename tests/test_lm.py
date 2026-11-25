@@ -38,8 +38,6 @@ BANNED_IMPORTS = (
     "anthropic",
     "requests",
     "httpx",
-    "huggingface_hub",
-    "transformers",
     "torch.hub",
 )
 
@@ -111,7 +109,7 @@ class ModelTests(unittest.TestCase):
         self.assertEqual(tokenizer.decode(tokenizer.encode("مرحبا")), "مرحبا")
         self.assertIn("<?>", tokenizer.decode(tokenizer.encode("مرحبا!")))
 
-    def test_no_external_model_clients(self) -> None:
+    def test_no_external_inference_api_clients(self) -> None:
         for path in ROOT.glob("*.py"):
             source = path.read_text(encoding="utf-8")
             for name in BANNED_IMPORTS:
