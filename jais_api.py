@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 MODEL_ID = os.getenv("JAIS_MODEL_ID", "Dhunun/Jais-3.0.9B")
+ADAPTER_ID = os.getenv("JAIS_ADAPTER_ID", "").strip()
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 DTYPE = torch.float16 if DEVICE.type == "cuda" else torch.float32
 
@@ -53,6 +54,9 @@ def load_model():
         torch_dtype=DTYPE,
         low_cpu_mem_usage=True,
     )
+    if ADAPTER_ID:
+        from peft import PeftModel
+        model = PeftModel.from_pretrained(model, ADAPTER_ID)
     model.to(DEVICE)
     model.eval()
     return tokenizer, model
@@ -71,7 +75,7 @@ def extract_answer(text: str) -> str:
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "model": MODEL_ID, "device": DEVICE.type}
+    return {"status": "ok", "model": MODEL_ID, "adapter": ADAPTER_ID or None, "device": DEVICE.type}
 
 
 @app.post("/v1/chat/completions")
