@@ -36,7 +36,7 @@ class ArabicSftPreparationTests(unittest.TestCase):
                     sys.executable, str(SCRIPT),
                     "--input", str(source),
                     "--output-dir", str(output),
-                    "--validation-ratio", "0.5",
+                    "--validation-ratio", "0.4",
                 ],
                 check=True,
                 capture_output=True,
