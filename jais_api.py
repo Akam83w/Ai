@@ -3,9 +3,6 @@
 Run:
   pip install -r requirements-jais.txt
   JAIS_MODEL_ID=Dhunun/Jais-3.0.9B python jais_api.py
-
-The API uses the model's native K2 Horizon chat template and returns only
-the assistant answer, not the internal reasoning segment.
 """
 from __future__ import annotations
 
@@ -15,6 +12,7 @@ from typing import Literal
 
 import torch
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -22,7 +20,16 @@ MODEL_ID = os.getenv("JAIS_MODEL_ID", "Dhunun/Jais-3.0.9B")
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 DTYPE = torch.float16 if DEVICE.type == "cuda" else torch.float32
 
-app = FastAPI(title="OwnedLM Jais API", version="0.2.0")
+app = FastAPI(title="Jais – Dhunun API", version="0.3.0")
+# Prototype setting: allow the separate chat page to call this API from a browser.
+# Before public deployment, replace "*" with the exact website origin and add authentication.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["GET", "POST"],
+    allow_headers=["Content-Type"],
+)
 
 
 class Message(BaseModel):
@@ -39,10 +46,7 @@ class ChatRequest(BaseModel):
 
 @lru_cache(maxsize=1)
 def load_model():
-    tokenizer = AutoTokenizer.from_pretrained(
-        MODEL_ID,
-        trust_remote_code=True,
-    )
+    tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, trust_remote_code=True)
     model = AutoModelForCausalLM.from_pretrained(
         MODEL_ID,
         trust_remote_code=True,
@@ -55,47 +59,33 @@ def load_model():
 
 
 def extract_answer(text: str) -> str:
-    """Remove the K2 Horizon reasoning section and trailing turn markers."""
     for marker in ("</ifm|think>", "</ifm|think_fast>", "</ifm|think_faster>"):
         if marker in text:
             text = text.rsplit(marker, 1)[-1]
             break
-
     for marker in ("<|ifm|im_end|>", "<|endoftext|>", "<|eot_id|>"):
         if marker in text:
             text = text.split(marker, 1)[0]
-
     return text.strip()
 
 
 @app.get("/health")
 def health():
-    return {
-        "status": "ok",
-        "model": MODEL_ID,
-        "device": DEVICE.type,
-    }
+    return {"status": "ok", "model": MODEL_ID, "device": DEVICE.type}
 
 
 @app.post("/v1/chat/completions")
 def chat(request: ChatRequest):
     try:
         tokenizer, model = load_model()
-        messages = [
-            {"role": item.role, "content": item.content}
-            for item in request.messages
-        ]
-
-        # Use Jais 3's own K2 Horizon template. The previous generic pipeline
-        # call did not set reasoning_effort and could expose an unsuitable
-        # prompt/completion format to the user.
+        messages = [{"role": item.role, "content": item.content} for item in request.messages]
         inputs = tokenizer.apply_chat_template(
             messages,
             tokenize=True,
             add_generation_prompt=True,
             return_tensors="pt",
             return_dict=True,
-            reasoning_effort="high",
+            reasoning_effort="low",
         )
         inputs = {key: value.to(DEVICE) for key, value in inputs.items()}
         inputs.pop("token_type_ids", None)
@@ -113,21 +103,14 @@ def chat(request: ChatRequest):
             )
 
         prompt_length = inputs["input_ids"].shape[-1]
-        generated_tokens = output[0, prompt_length:]
-        generated_text = tokenizer.decode(
-            generated_tokens,
-            skip_special_tokens=False,
-        )
+        generated_text = tokenizer.decode(output[0, prompt_length:], skip_special_tokens=False)
         answer = extract_answer(generated_text)
-
         if not answer:
             raise RuntimeError("The model returned an empty assistant answer.")
 
         return {
             "model": MODEL_ID,
-            "choices": [
-                {"message": {"role": "assistant", "content": answer}}
-            ],
+            "choices": [{"message": {"role": "assistant", "content": answer}}],
         }
     except Exception as exc:
         raise HTTPException(
@@ -138,5 +121,4 @@ def chat(request: ChatRequest):
 
 if __name__ == "__main__":
     import uvicorn
-
     uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", "8000")))
