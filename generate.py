@@ -2,7 +2,7 @@
 """Sample text from a local checkpoint.
 
 This process does not contact a model provider. It only reads the checkpoint
-you trained and prints characters.
+you trained and prints generated tokens as text.
 """
 
 from __future__ import annotations
