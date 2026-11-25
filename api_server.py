@@ -253,7 +253,10 @@ def chat(req: ChatRequest):
     if knowledge_match is not None:
         answer, mode = knowledge_match["answer"], "knowledge_retrieval"
     elif model is None:
-        answer, mode = starter_reply(user_text), "model_unavailable"
+        raise HTTPException(
+            status_code=503,
+            detail=f"OwnedLM pretrained model is not available: {_load_error or 'model loading failed'}",
+        )
     else:
         messages = [{"role": item.role, "content": item.content} for item in req.messages]
         if not any(item["role"] == "system" for item in messages):
