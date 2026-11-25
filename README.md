@@ -228,3 +228,8 @@ its checkpoint are still required before the model's weights change.
 ## Arabic-first Jais-3 training path
 
 For the project's Arabic-only pretrained base, teacher-generated learning curriculum, validated SFT dataset, and LoRA customization workflow, see [JAIS-SETUP.md](JAIS-SETUP.md) and [distillation/README.md](distillation/README.md). This path uses the project's private Jais-3 checkpoint as a locally hosted base; the older tiny from-scratch Transformer remains a separate experimental implementation and cannot directly load Jais weights. Generated Arabic training data and adapter/model files stay outside the public Git repository.
+
+
+## تأسيس اللغة العربية من مصادر متعددة
+
+أُضيف مسار مستقل لتوسيع العربية في OwnedLM بالاعتماد على منهج لغوي شامل ومصادر بيانات عامة يجب تدقيق تراخيصها قبل الاستخدام. ابدأ من [دليل التدريب العربي](training/README.md)، وراجع [منهج اللغة العربية](training/arabic_curriculum.json) و[سجل مصادر البيانات](training/DATA_SOURCES.md). هذا المسار لا يشغّل Jais ولا يربط النموذج به وقت التشغيل؛ إنه ينقل خريطة المهارات وأفضل ممارسات إعداد البيانات إلى مشروع مستقل. لا تُنسخ أوزان Jais أو مفرداته مباشرة إلى TinyLM لأنها غير متوافقة مع بنيته.
