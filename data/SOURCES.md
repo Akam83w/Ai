@@ -15,3 +15,6 @@
 2. أضف صفاً هنا: اسم الملف، من أين جاء، والرخصة أو سبب امتلاكك حق استخدامه.
 3. لا تنسخ كتباً محمية، ولا محتوى مواقع، ولا مخرجات نماذج تجارية، إلا إذا كانت الرخصة تسمح صراحة بالتدريب وإعادة التوزيع التي تنويها.
 4. لا تضع مفاتيح أو كلمات سر أو بيانات شخصية داخل الملفات المتتبعة.
+
+
+| `prepare_iraqi_dataset.py` (optional local import) | `ameer4wisam/iraqi-arabic-sales-dialogue-dataset`, config `v4` | CC BY 4.0; synthetic, template-generated, Baghdadi-based; importer excludes the disclosed scraped-car subset and stores data under ignored `data/private/` |
