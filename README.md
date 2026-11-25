@@ -137,6 +137,37 @@ data/private/     بيانات محلية غير متتبعة
 5. لا تقارن المخرجات بمساعد تجاري قبل أن تمتلك بيانات وحساباً بهذا الحجم، وقبل أن تقيس ذلك على نص لم يره النموذج.
 
 
+## Local knowledge retrieval and deployment diagnostics
+
+The API can now retrieve a high-confidence answer from adjacent
+`المستخدم:` / `الصديق:` pairs in `data/corpus/*.txt`. This is an
+extractive lookup over text you supplied; it is **not** model training,
+semantic understanding, or a general web search. A match is returned only
+when the local lexical-similarity threshold is met. The response mode is
+`knowledge_retrieval` and includes the matched question, source file, and
+score. If no strong match exists, the API continues to the trained model or
+the honest starter fallback.
+
+The `/health` endpoint now reports whether the checkpoint exists, its byte
+size, load errors, model parameter count, vocabulary size, context length,
+and the number of local knowledge files. Interpret the mode as follows:
+
+- `trained_model`: checkpoint loaded successfully.
+- `checkpoint_missing`: no checkpoint exists at the reported path.
+- `checkpoint_invalid`: a file exists but could not be loaded; inspect
+  `load_error`.
+
+The Docker image includes the local corpus and training utilities
+(`train.py`, `dataset.py`, and `generate.py`) but deliberately does **not**
+invent or train a checkpoint during deployment. Train a checkpoint separately
+with your own data, then mount or provide it at `OWNEDLM_CHECKPOINT`. Keep
+that file on persistent storage; a container rebuild can otherwise discard it.
+
+Conversation storage is still separate from training. Saving a chat does not
+change model weights. Review conversation candidates, remove private or
+sensitive content, prepare a curated training corpus, run the training script,
+evaluate the new checkpoint, and only then deploy it.
+
 ## Conversation storage and learning-data collection
 
 The API stores each incoming user message and generated assistant reply in
