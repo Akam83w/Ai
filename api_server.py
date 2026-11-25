@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, PlainTextResponse
 from pydantic import BaseModel, Field
 from model import ModelConfig, TinyLM
-from tokenizer import CharTokenizer
+from tokenizer import tokenizer_from_dict
 from knowledge import retrieve_answer
 
 ROOT = Path(__file__).resolve().parent
@@ -130,7 +130,7 @@ def load_checkpoint():
     try:
         _load_error = None
         ckpt = torch.load(CHECKPOINT, map_location=DEVICE, weights_only=False)
-        tok = CharTokenizer.from_dict(ckpt["tokenizer"])
+        tok = tokenizer_from_dict(ckpt["tokenizer"])
         cfg = ModelConfig.from_dict(ckpt["config"])
         net = TinyLM(cfg).to(DEVICE)
         net.load_state_dict(ckpt["model"])
