@@ -10,9 +10,11 @@ from fastapi.responses import FileResponse, PlainTextResponse
 from pydantic import BaseModel, Field
 from model import ModelConfig, TinyLM
 from tokenizer import CharTokenizer
+from knowledge import retrieve_answer
 
 ROOT = Path(__file__).resolve().parent
 CHECKPOINT = Path(os.getenv("OWNEDLM_CHECKPOINT", str(ROOT / "checkpoints" / "model.pt")))
+KNOWLEDGE_DIR = Path(os.getenv("OWNEDLM_KNOWLEDGE_DIR", str(ROOT / "data" / "corpus")))
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
 DB_PATH = Path(os.getenv("OWNEDLM_DB_PATH", "/data/ownedlm.sqlite3"))
 ADMIN_TOKEN = os.getenv("OWNEDLM_ADMIN_TOKEN", "")
@@ -122,8 +124,11 @@ def home():
 def load_checkpoint():
     global _model, _tokenizer, _load_error
     if _model is not None: return _model, _tokenizer
-    if not CHECKPOINT.is_file(): return None, None
+    if not CHECKPOINT.is_file():
+        _load_error = f"Checkpoint not found: {CHECKPOINT}"
+        return None, None
     try:
+        _load_error = None
         ckpt = torch.load(CHECKPOINT, map_location=DEVICE, weights_only=False)
         tok = CharTokenizer.from_dict(ckpt["tokenizer"])
         cfg = ModelConfig.from_dict(ckpt["config"])
@@ -159,16 +164,25 @@ def build_dialogue(messages: list[Message], limit: int) -> str:
 def health():
     model, _ = load_checkpoint()
     db_ok = init_database()
+    checkpoint_exists = CHECKPOINT.is_file()
+    checkpoint_size = CHECKPOINT.stat().st_size if checkpoint_exists else 0
     return {
         "status": "ok",
         "service": "OwnedLM",
         "device": DEVICE.type,
         "model_loaded": model is not None,
-        "mode": "trained_model" if model is not None else "starter",
+        "mode": "trained_model" if model is not None else ("checkpoint_invalid" if checkpoint_exists else "checkpoint_missing"),
         "database_connected": db_ok,
         "database_type": "postgresql" if DATABASE_URL.startswith(("postgres://", "postgresql://")) else "sqlite",
         "database_error": _db_error,
         "checkpoint": str(CHECKPOINT),
+        "checkpoint_exists": checkpoint_exists,
+        "checkpoint_size_bytes": checkpoint_size,
+        "knowledge_directory": str(KNOWLEDGE_DIR),
+        "knowledge_files": len(list(KNOWLEDGE_DIR.rglob("*.txt"))) if KNOWLEDGE_DIR.is_dir() else 0,
+        "model_parameters": model.parameter_count() if model is not None else None,
+        "model_vocab_size": model.cfg.vocab_size if model is not None else None,
+        "model_context_length": model.cfg.max_seq_len if model is not None else None,
         "load_error": _load_error
     }
 
@@ -216,10 +230,16 @@ def delete_conversation(session_id: str):
 @app.post("/v1/chat/completions")
 def chat(req: ChatRequest):
     prompt_text = build_dialogue(req.messages, 120)
+    user_text = next((m.content for m in reversed(req.messages) if m.role == "user"), "")
     model, tok = load_checkpoint()
-    if model is None:
-        last_user = next((m.content for m in reversed(req.messages) if m.role == "user"), "")
-        answer, mode = starter_reply(last_user), "starter"
+
+    # Prefer a high-confidence answer explicitly present in the project's own corpus.
+    # This is retrieval, not a generated or newly learned model response.
+    knowledge_match = retrieve_answer(user_text, KNOWLEDGE_DIR)
+    if knowledge_match is not None:
+        answer, mode = knowledge_match["answer"], "knowledge_retrieval"
+    elif model is None:
+        answer, mode = starter_reply(user_text), "starter"
     else:
         prompt_text = prompt_text[-(model.cfg.max_seq_len - 1):]
         ids = tok.encode(prompt_text, add_bos=True) or [tok.bos_id]
@@ -231,7 +251,6 @@ def chat(req: ChatRequest):
         if not answer:
             answer = "ما كدرت أكمّل الرد من الأوزان الحالية."
         mode = "trained_model"
-    user_text = next((m.content for m in reversed(req.messages) if m.role == "user"), "")
     saved = False
     try:
         if user_text:
@@ -240,7 +259,14 @@ def chat(req: ChatRequest):
     except Exception as exc:
         global _db_error
         _db_error = f"{type(exc).__name__}: {exc}"
-    return {"model":"OwnedLM","mode":mode,"saved_to_database":saved,"choices":[{"message":{"role":"assistant","content":answer}}]}
+    response = {"model":"OwnedLM","mode":mode,"saved_to_database":saved,"choices":[{"message":{"role":"assistant","content":answer}}]}
+    if knowledge_match is not None:
+        response["knowledge_match"] = {
+            "source": knowledge_match["source"],
+            "matched_question": knowledge_match["matched_question"],
+            "score": knowledge_match["score"],
+        }
+    return response
 
 if __name__ == "__main__":
     import uvicorn
