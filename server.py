@@ -10,8 +10,6 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
-import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer
 
 ROOT = Path(__file__).resolve().parent
 WEB_ROOT = ROOT / "dist"
@@ -26,14 +24,15 @@ MAX_NEW_TOKENS = 128
 MIN_MODEL_RAM_GB = float(os.environ.get("OWNEDLM_MIN_RAM_GB", "4"))
 MODEL = None
 TOKENIZER = None
+torch = None
+AutoModelForCausalLM = None
+AutoTokenizer = None
 MODEL_LOADING = False
 MODEL_ERROR = ""
 MODEL_LOCK = threading.Lock()
 GENERATION_LOCK = threading.Lock()
-DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-DTYPE = torch.bfloat16 if DEVICE == "cpu" else (
-    torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
-)
+DEVICE = "cpu"
+DTYPE = None
 
 def container_memory_limit_bytes() -> int | None:
     """Return the container RAM limit when exposed by cgroups."""
@@ -64,6 +63,7 @@ SYSTEM_PROMPT = (
 
 def load_model() -> None:
     global MODEL, TOKENIZER, MODEL_LOADING, MODEL_ERROR
+    global torch, AutoModelForCausalLM, AutoTokenizer, DEVICE, DTYPE
     with MODEL_LOCK:
         if MODEL is not None or MODEL_LOADING:
             return
@@ -83,6 +83,18 @@ def load_model() -> None:
             )
             print(f"[OwnedLM] {MODEL_ERROR}", flush=True)
             return
+        # Import the heavyweight ML stack only after the RAM guard. This lets
+        # the lightweight web/API process start on small hosting plans.
+        import torch as torch_module
+        from transformers import AutoModelForCausalLM as model_class, AutoTokenizer as tokenizer_class
+        torch = torch_module
+        AutoModelForCausalLM = model_class
+        AutoTokenizer = tokenizer_class
+        DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+        DTYPE = torch.bfloat16 if DEVICE == "cpu" else (
+            torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+        )
+        torch.set_num_threads(max(1, min(2, os.cpu_count() or 1)))
         print(f"[OwnedLM] Loading {MODEL_ID} on {DEVICE} ({DTYPE})", flush=True)
         tokenizer = AutoTokenizer.from_pretrained(
             MODEL_ID,
