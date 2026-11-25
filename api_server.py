@@ -119,6 +119,8 @@ def require_admin(token: str | None):
 @app.on_event("startup")
 def startup():
     init_database()
+    # Load the pretrained base during startup so the first chat request is not a cold load.
+    load_checkpoint()
 
 @app.get("/")
 def home():
