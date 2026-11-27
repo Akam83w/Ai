@@ -9,7 +9,11 @@ from fastapi import FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, PlainTextResponse
 from pydantic import BaseModel, Field
-from knowledge import retrieve_answer
+from knowledge import retrieve_answer, build_rag_context
+from conversation import (
+    build_system_prompt, continuity_note, decide_policy, format_history_for_prompt,
+    polish_reply, style_hint_from_user,
+)
 
 ROOT = Path(__file__).resolve().parent
 CHECKPOINT = Path(os.getenv("OWNEDLM_CHECKPOINT", str(ROOT / "checkpoints" / "model.pt")))
@@ -119,7 +123,6 @@ def require_admin(token: str | None):
 @app.on_event("startup")
 def startup():
     init_database()
-    # Load the pretrained base during startup so the first chat request is not a cold load.
     load_checkpoint()
 
 @app.get("/")
@@ -246,12 +249,23 @@ def delete_conversation(session_id: str):
 @app.post("/v1/chat/completions")
 def chat(req: ChatRequest):
     user_text = next((m.content for m in reversed(req.messages) if m.role == "user"), "")
+    prior_user_turns = [m.content for m in req.messages if m.role == "user"][:-1]
+    prior_assistant = [m.content for m in req.messages if m.role == "assistant"]
+    policy = decide_policy(user_text, history_len=len(req.messages))
     model, tok = load_checkpoint()
 
-    # Prefer a high-confidence answer explicitly present in the project's own corpus.
-    knowledge_match = retrieve_answer(user_text, KNOWLEDGE_DIR)
+    knowledge_match = retrieve_answer(
+        user_text,
+        KNOWLEDGE_DIR,
+        context_turns=prior_user_turns or None,
+    )
     if knowledge_match is not None:
-        answer, mode = knowledge_match["answer"], "knowledge_retrieval"
+        answer = polish_reply(
+            knowledge_match["answer"],
+            block_sales=policy.block_sales,
+            user_text=user_text,
+        )
+        mode = "knowledge_retrieval"
     elif model is None:
         raise HTTPException(
             status_code=503,
@@ -259,16 +273,35 @@ def chat(req: ChatRequest):
         )
     else:
         messages = [{"role": item.role, "content": item.content} for item in req.messages]
+        rag_hits = build_rag_context(user_text, KNOWLEDGE_DIR, top_k=3, min_score=0.35)
+        rag_block = ""
+        if rag_hits:
+            lines = []
+            for hit in rag_hits:
+                lines.append(f"سؤال مشابه: {hit['question']}\nجواب مناسب: {hit['answer']}")
+            rag_block = (
+                "أمثلة من معرفة المشروع (استخدمها فقط إذا كانت مفيدة للسؤال الحالي، "
+                "ولا تنسخ سعراً أو منتجاً إذا السؤال ليس عن بيع):\n"
+                + "\n\n".join(lines)
+            )
+        cont = continuity_note(prior_user_turns, prior_assistant)
+        style = style_hint_from_user(user_text)
+        system_content = build_system_prompt(rag_block=rag_block, style_hint=style)
+        if cont:
+            system_content += "\n" + cont
+
         if not any(item["role"] == "system" for item in messages):
-            messages.insert(0, {
-                "role": "system",
-                "content": (
-                    "أنت OwnedLM، مساعد عربي ودود. أجب بلغة عربية طبيعية وواضحة، ويمكنك استخدام العامية أو الفصحى "
-                    "بحسب طريقة كلام المستخدم، ولا تلتزم بالفصحى إذا كان المستخدم يتكلم بالعامية. طابق لهجته قدر الإمكان "
-                    "من دون تصنّع. أجب عن السؤال نفسه مباشرة وباختصار مناسب، ولا تخلط بين المواضيع أو تكرر السؤال. "
-                    "إذا لم تعرف الإجابة فقل ذلك بوضوح ولا تخترع معلومات."
-                )
-            })
+            messages.insert(0, {"role": "system", "content": system_content})
+        else:
+            for item in messages:
+                if item["role"] == "system":
+                    item["content"] = system_content
+                    break
+
+        messages = format_history_for_prompt(messages, max_turns=12)
+        max_new = min(req.max_new_tokens, policy.max_tokens)
+        temperature = min(req.temperature, policy.temperature) if policy.prefer_short else req.temperature
+
         inputs = tok.apply_chat_template(
             messages,
             tokenize=True,
@@ -282,19 +315,20 @@ def chat(req: ChatRequest):
         with torch.inference_mode():
             output = model.generate(
                 **inputs,
-                max_new_tokens=req.max_new_tokens,
+                max_new_tokens=max_new,
                 do_sample=True,
-                temperature=req.temperature,
+                temperature=max(0.05, temperature),
                 top_p=req.top_p,
                 top_k=20,
-                repetition_penalty=1.0,
+                repetition_penalty=1.08,
                 pad_token_id=tok.eos_token_id,
             )
         prompt_length = inputs["input_ids"].shape[-1]
         generated_text = tok.decode(output[0, prompt_length:], skip_special_tokens=False)
         answer = extract_answer(generated_text)
+        answer = polish_reply(answer, block_sales=policy.block_sales, user_text=user_text)
         if not answer:
-            answer = "لم أتمكن من إنشاء إجابة."
+            answer = "لم أتمكن من إنشاء إجابة واضحة. جرب تصيغ السؤال بجملة ثانية."
         mode = "jais_pretrained"
 
     saved = False
@@ -309,6 +343,7 @@ def chat(req: ChatRequest):
         "model": "OwnedLM",
         "base_model": JAIS_MODEL_ID,
         "mode": mode,
+        "intent": policy.intent,
         "saved_to_database": saved,
         "choices": [{"message": {"role": "assistant", "content": answer}}],
     }
@@ -317,8 +352,10 @@ def chat(req: ChatRequest):
             "source": knowledge_match["source"],
             "matched_question": knowledge_match["matched_question"],
             "score": knowledge_match["score"],
+            "intent": knowledge_match.get("intent"),
         }
     return response
+
 
 if __name__ == "__main__":
     import uvicorn
