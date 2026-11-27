@@ -1,6 +1,3 @@
---extra-index-url https://download.pytorch.org/whl/cpu
-torch==2.2.2+cpu
-fastapi==0.115.6
-uvicorn==0.34.0
-psycopg[binary]==3.2.3
-tokenizers==0.21.0
+version https://git-lfs.github.com/spec/v1
+oid sha256:f9d27d37294f05f302d000bc5173cce77d03741fa1b8cf56dabc3a3b976d9a5e
+size 147
