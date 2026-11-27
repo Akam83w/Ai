@@ -17,6 +17,14 @@ _ARABIC_STOPWORDS = {
     "عن", "في", "منو", "شنهي", "هاي", "هذا", "هذه", "هسه", "بعد",
 }
 
+# Greetings need a small intent rule: words such as "شلونك" are otherwise
+# removed as stopwords, leaving no lexical terms to compare with the corpus.
+_GREETING_QUERY = re.compile(
+    r"^(?:(?:هلا|هلو|مرحبا|السلام عليكم|شلونك|كيف حالك|شخبارك|شلون الحال)"
+    r"(?:\s+(?:بيك|عليكم|ورحمه|الله|وبركاته|اخي|عزيزي|حبيبي))?"
+    r"(?:\s+(?:شلونك|كيف حالك|شخبارك))?)+$"
+)
+
 
 def normalize(text: str) -> str:
     text = unicodedata.normalize("NFKC", text).lower()
@@ -54,6 +62,10 @@ def _similarity(query: str, candidate: str) -> float:
     return 0.75 * dice + 0.25 * tri
 
 
+def _is_greeting(text: str) -> bool:
+    return bool(_GREETING_QUERY.fullmatch(normalize(text)))
+
+
 def load_pairs(corpus_dir: str | Path) -> list[tuple[str, str, str]]:
     """Read adjacent المستخدم/الصديق turns from UTF-8 .txt corpus files."""
     root = Path(corpus_dir)
@@ -83,11 +95,30 @@ def retrieve_answer(
     corpus_dir: str | Path,
     min_score: float = 0.48,
 ) -> dict | None:
-    """Return the closest stored answer only when the match is sufficiently strong."""
+    """Return a stored answer only for a clear greeting or strong text match."""
     if not query.strip():
         return None
+
+    pairs = load_pairs(corpus_dir)
+    # Handle short greetings explicitly. The normal scorer treats "شلون" and
+    # "كيف" as stopwords, so a plain "شلونك؟" otherwise never matches the
+    # greeting example and gets sent to free-form generation instead.
+    if _is_greeting(query):
+        greeting_pairs = [(question, answer, source) for question, answer, source in pairs
+                          if _is_greeting(question)]
+        if greeting_pairs:
+            question, answer, source = max(
+                greeting_pairs, key=lambda pair: _similarity(query, pair[0])
+            )
+            return {
+                "answer": answer,
+                "matched_question": question,
+                "source": source,
+                "score": 1.0,
+            }
+
     best = None
-    for question, answer, source in load_pairs(corpus_dir):
+    for question, answer, source in pairs:
         score = _similarity(query, question)
         if best is None or score > best["score"]:
             best = {
