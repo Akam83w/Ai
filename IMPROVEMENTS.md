@@ -18,6 +18,7 @@
    - ملاحظة استمرارية من آخر رسائل الجلسة
 
 3. **api_server.py**
+   - يستدعي `retrieve_answer` أولاً؛ لا يحمّل Jais إذا وُجد جواب محلي
    - يدمج السياسة + الاسترجاع + RAG + تلميع الرد
    - يحدّ max_new_tokens للتحيات حتى لا يثرثر النموذج
 
@@ -33,7 +34,7 @@
 ## تشغيل سريع
 
 ```bash
-python -m unittest tests.test_knowledge -v
+python -m unittest discover -s tests -t . -v
 python chat_cli.py
 # مع السيرفر:
 python api_server.py
@@ -46,3 +47,15 @@ python chat_cli.py --api http://127.0.0.1:8080
 - نموذج Jais (إن وُجد) يعطي توليداً أوسع مع RAG.
 - TinyLM من الصفر بعد تدريب قصير **لا** يصل لمستوى ChatGPT؛ يحتاج بيانات ضخمة جداً.
 - نسبة "قريبة من ChatGPT" تعتمد أساساً على استخدام Jais + كوربس متنوع + السياسة أعلاه، لا على الـ tiny وحدها.
+
+## عدد أزواج المعرفة (توضيح)
+
+الرقم **~701** هو مجموع أزواج `المستخدم`/`الصديق` في كل ملفات `data/corpus/`، وليس عدد أزواج ملف واحد:
+
+| الملف | تقريباً |
+| --- | --- |
+| `iraqi_companion.txt` | ~653 |
+| `everyday_chat.txt` | ~48 |
+| **المجموع** | **~701** |
+
+`everyday_chat.txt` إضافة صغيرة لحوارات يومية (غير مبيعات). bulk الحوارات ما زال في `iraqi_companion.txt`.
