@@ -151,7 +151,7 @@ def load_checkpoint():
         net = AutoModelForCausalLM.from_pretrained(
             JAIS_MODEL_ID,
             trust_remote_code=True,
-            torch_dtype=DTYPE,
+            dtype=DTYPE,
             low_cpu_mem_usage=True,
         )
         if JAIS_ADAPTER_ID:
@@ -287,6 +287,9 @@ def chat(req: ChatRequest):
                 detail=f"OwnedLM pretrained model is not available: {_load_error or 'model loading failed'}",
             )
         messages = [{"role": item.role, "content": item.content} for item in req.messages]
+        for message in messages:
+            if message.get("role") == "assistant":
+                message.setdefault("thinking", "")
         rag_hits = build_rag_context(user_text, KNOWLEDGE_DIR, top_k=3, min_score=0.35)
         rag_block = ""
         if rag_hits:
@@ -326,6 +329,7 @@ def chat(req: ChatRequest):
         )
         inputs = {key: value.to(DEVICE) for key, value in inputs.items()}
         inputs.pop("token_type_ids", None)
+        torch = _torch()
         with torch.inference_mode():
             output = model.generate(
                 **inputs,
@@ -334,8 +338,8 @@ def chat(req: ChatRequest):
                 temperature=max(0.05, temperature),
                 top_p=req.top_p,
                 top_k=20,
-                repetition_penalty=1.08,
-                pad_token_id=tok.eos_token_id,
+                repetition_penalty=1.0,
+                pad_token_id=tok.pad_token_id,
             )
         prompt_length = inputs["input_ids"].shape[-1]
         generated_text = tok.decode(output[0, prompt_length:], skip_special_tokens=False)
