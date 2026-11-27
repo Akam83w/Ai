@@ -3,8 +3,6 @@ from pathlib import Path
 from typing import Literal
 from contextlib import contextmanager
 
-import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, PlainTextResponse
@@ -23,8 +21,19 @@ DB_PATH = Path(os.getenv("OWNEDLM_DB_PATH", "/data/ownedlm.sqlite3"))
 ADMIN_TOKEN = os.getenv("OWNEDLM_ADMIN_TOKEN", "")
 JAIS_MODEL_ID = os.getenv("JAIS_MODEL_ID", "Dhunun/OwnedLM-Jais-3-0.9B")
 JAIS_ADAPTER_ID = os.getenv("JAIS_ADAPTER_ID", "").strip()
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-DTYPE = (torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16) if DEVICE.type == "cuda" else torch.float32
+def _torch():
+    import torch
+    return torch
+
+def _device_and_dtype():
+    torch = _torch()
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    dtype = (torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16) if device.type == "cuda" else torch.float32
+    return device, dtype
+
+# Lazy placeholders; resolved inside load_checkpoint.
+DEVICE = None
+DTYPE = None
 app = FastAPI(title="OwnedLM Arabic Companion API", version="2.0.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=False, allow_methods=["GET","POST","DELETE"], allow_headers=["Content-Type","X-Admin-Token"])
 
@@ -123,6 +132,7 @@ def require_admin(token: str | None):
 @app.on_event("startup")
 def startup():
     init_database()
+    # Load the pretrained base during startup so the first chat request is not a cold load.
     load_checkpoint()
 
 @app.get("/")
@@ -130,11 +140,14 @@ def home():
     return FileResponse(ROOT / "jais-chat.html")
 
 def load_checkpoint():
-    global _model, _tokenizer, _load_error
+    global _model, _tokenizer, _load_error, DEVICE, DTYPE
     if _model is not None:
         return _model, _tokenizer
     try:
         _load_error = None
+        torch = _torch()
+        from transformers import AutoModelForCausalLM, AutoTokenizer
+        DEVICE, DTYPE = _device_and_dtype()
         tok = AutoTokenizer.from_pretrained(JAIS_MODEL_ID, trust_remote_code=True)
         net = AutoModelForCausalLM.from_pretrained(
             JAIS_MODEL_ID,
@@ -189,7 +202,7 @@ def health():
     return {
         "status": "ok" if model is not None else "degraded",
         "service": "OwnedLM",
-        "device": DEVICE.type,
+        "device": (DEVICE.type if DEVICE is not None else "unloaded"),
         "model_id": JAIS_MODEL_ID,
         "adapter_id": JAIS_ADAPTER_ID or None,
         "model_loaded": model is not None,
@@ -252,8 +265,8 @@ def chat(req: ChatRequest):
     prior_user_turns = [m.content for m in req.messages if m.role == "user"][:-1]
     prior_assistant = [m.content for m in req.messages if m.role == "assistant"]
     policy = decide_policy(user_text, history_len=len(req.messages))
-    model, tok = load_checkpoint()
 
+    # 1) Local knowledge / intents first — do not load Jais when this succeeds.
     knowledge_match = retrieve_answer(
         user_text,
         KNOWLEDGE_DIR,
@@ -266,12 +279,14 @@ def chat(req: ChatRequest):
             user_text=user_text,
         )
         mode = "knowledge_retrieval"
-    elif model is None:
-        raise HTTPException(
-            status_code=503,
-            detail=f"OwnedLM pretrained model is not available: {_load_error or 'model loading failed'}",
-        )
     else:
+        # 2) Only now load the generative model (Jais / adapter).
+        model, tok = load_checkpoint()
+        if model is None:
+            raise HTTPException(
+                status_code=503,
+                detail=f"OwnedLM pretrained model is not available: {_load_error or 'model loading failed'}",
+            )
         messages = [{"role": item.role, "content": item.content} for item in req.messages]
         rag_hits = build_rag_context(user_text, KNOWLEDGE_DIR, top_k=3, min_score=0.35)
         rag_block = ""
