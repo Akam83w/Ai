@@ -325,7 +325,7 @@ def chat(req: ChatRequest):
             add_generation_prompt=True,
             return_tensors="pt",
             return_dict=True,
-            reasoning_effort="high",
+            reasoning_effort="low",
         )
         inputs = {key: value.to(DEVICE) for key, value in inputs.items()}
         inputs.pop("token_type_ids", None)
