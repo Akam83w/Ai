@@ -5,6 +5,7 @@ on:
     branches: [main, ownedlm-improvements]
   pull_request:
     branches: [main, ownedlm-improvements]
+  workflow_dispatch:
 
 jobs:
   test:
@@ -18,7 +19,6 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          # TestClient needs httpx; torch already in requirements.txt
           pip install httpx
       - name: Check Python syntax
         run: python -m compileall -q .

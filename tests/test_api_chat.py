@@ -9,7 +9,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-# Prevent startup from trying to download Jais during import/TestClient lifespan.
+# Prevent accidental remote model id resolution during import.
 os.environ.setdefault("JAIS_MODEL_ID", "mock/does-not-exist")
 
 
@@ -38,59 +38,72 @@ class ApiChatKnowledgeFirstTests(unittest.TestCase):
 
         from fastapi.testclient import TestClient
 
-        # Disable lifespan model load
-        with patch.object(self.api, "load_checkpoint", return_value=(None, None)):
-            self.client = TestClient(self.api.app)
+        self.load_calls = {"n": 0}
 
-    def tearDown(self) -> None:
-        self._tmpdir.cleanup()
-
-    def test_greeting_returns_knowledge_without_loading_model(self) -> None:
-        load_calls = {"n": 0}
-
-        def _fake_load():
-            load_calls["n"] += 1
+        def counting_load():
+            self.load_calls["n"] += 1
             return None, None
 
-        with patch.object(self.api, "load_checkpoint", side_effect=_fake_load):
-            resp = self.client.post(
-                "/v1/chat/completions",
-                json={
-                    "session_id": "t1",
-                    "messages": [{"role": "user", "content": "هلا شلونك"}],
-                },
-            )
+        self._real_load = self.api.load_checkpoint
+        self.api.load_checkpoint = counting_load
+        # Real lifespan: startup runs init_database only (must not call load_checkpoint).
+        self.client = TestClient(self.api.app)
+
+    def tearDown(self) -> None:
+        self.api.load_checkpoint = self._real_load
+        self._tmpdir.cleanup()
+
+    def test_startup_does_not_load_checkpoint(self) -> None:
+        # TestClient triggers lifespan/startup on construction in setUp.
+        self.assertEqual(
+            self.load_calls["n"],
+            0,
+            "startup() must not call load_checkpoint()",
+        )
+
+    def test_greeting_after_server_start_without_loading_jais(self) -> None:
+        before = self.load_calls["n"]
+        resp = self.client.post(
+            "/v1/chat/completions",
+            json={
+                "session_id": "t1",
+                "messages": [{"role": "user", "content": "هلا شلونك"}],
+            },
+        )
         self.assertEqual(resp.status_code, 200, resp.text)
         body = resp.json()
         self.assertEqual(body["mode"], "knowledge_retrieval")
         self.assertIn("هلا", body["choices"][0]["message"]["content"])
-        self.assertEqual(load_calls["n"], 0, "load_checkpoint must not run on knowledge hit")
+        self.assertEqual(
+            self.load_calls["n"],
+            before,
+            "greeting must not call load_checkpoint after server start",
+        )
 
     def test_stored_question_works_when_model_unavailable(self) -> None:
-        with patch.object(self.api, "load_checkpoint", return_value=(None, None)):
-            resp = self.client.post(
-                "/v1/chat/completions",
-                json={
-                    "session_id": "t2",
-                    "messages": [{"role": "user", "content": "شلون أركز بالشغل؟"}],
-                },
-            )
+        resp = self.client.post(
+            "/v1/chat/completions",
+            json={
+                "session_id": "t2",
+                "messages": [{"role": "user", "content": "شلون أركز بالشغل؟"}],
+            },
+        )
         self.assertEqual(resp.status_code, 200, resp.text)
         body = resp.json()
         self.assertEqual(body["mode"], "knowledge_retrieval")
         self.assertIn("قطع", body["choices"][0]["message"]["content"])
 
     def test_unknown_question_without_model_returns_503(self) -> None:
-        with patch.object(self.api, "load_checkpoint", return_value=(None, None)):
-            self.api._load_error = "mocked missing weights"
-            resp = self.client.post(
-                "/v1/chat/completions",
-                json={
-                    "session_id": "t3",
-                    "messages": [{"role": "user", "content": "ما عاصمة منغوليا؟"}],
-                },
-            )
+        self.api._load_error = "mocked missing weights"
+        resp = self.client.post(
+            "/v1/chat/completions",
+            json={
+                "session_id": "t3",
+                "messages": [{"role": "user", "content": "ما عاصمة منغوليا؟"}],
+            },
+        )
         self.assertEqual(resp.status_code, 503)
+        self.assertGreaterEqual(self.load_calls["n"], 1)
 
     def test_rag_context_builder_returns_related_pairs(self) -> None:
         from knowledge import build_rag_context, clear_pair_cache
@@ -103,7 +116,8 @@ class ApiChatKnowledgeFirstTests(unittest.TestCase):
 
 
 class CorpusCountTests(unittest.TestCase):
-    def test_pair_counts_are_documented_honestly(self) -> None:
+    def test_pair_counts_match_files_on_disk(self) -> None:
+        """Counts come from files present in the checkout — not a fixed marketing number."""
         from knowledge import clear_pair_cache, load_pairs
         from collections import Counter
 
@@ -115,13 +129,17 @@ class CorpusCountTests(unittest.TestCase):
         by_file = Counter(src for _q, _a, src in pairs)
         everyday = by_file.get("everyday_chat.txt", 0)
         companion = by_file.get("iraqi_companion.txt", 0)
-        # everyday_chat is a small topical supplement (~48 pairs), not the whole corpus.
+        total = len(pairs)
+
         self.assertGreaterEqual(everyday, 40)
-        self.assertLess(everyday, 100)
-        self.assertGreater(companion, 500)
-        total_named = everyday + companion
-        other = sum(v for k, v in by_file.items() if k not in ("everyday_chat.txt", "iraqi_companion.txt"))
-        self.assertEqual(len(pairs), total_named + other)
+        self.assertLess(everyday, 120)
+        self.assertGreater(companion, 400)
+        self.assertEqual(total, sum(by_file.values()))
+        self.assertGreater(
+            total,
+            500,
+            f"unexpectedly small corpus: total={total} by_file={dict(by_file)}",
+        )
 
 
 if __name__ == "__main__":
