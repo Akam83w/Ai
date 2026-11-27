@@ -39,22 +39,39 @@ class ApiChatKnowledgeFirstTests(unittest.TestCase):
         from fastapi.testclient import TestClient
 
         self.load_calls = {"n": 0}
+        self.startup_db_calls = {"n": 0}
+        self._real_load = self.api.load_checkpoint
+        self._real_init_database = self.api.init_database
+        self._real_db_path = self.api.DB_PATH
+        self.api.DB_PATH = self.corpus / "startup-test.sqlite3"
 
         def counting_load():
             self.load_calls["n"] += 1
             return None, None
 
-        self._real_load = self.api.load_checkpoint
+        def counting_init_database():
+            self.startup_db_calls["n"] += 1
+            return self._real_init_database()
+
         self.api.load_checkpoint = counting_load
-        # Real lifespan: startup runs init_database only (must not call load_checkpoint).
-        self.client = TestClient(self.api.app)
+        self.api.init_database = counting_init_database
+        # Entering TestClient as a context manager runs the real FastAPI lifespan.
+        self._client_context = TestClient(self.api.app)
+        self.client = self._client_context.__enter__()
 
     def tearDown(self) -> None:
+        self._client_context.__exit__(None, None, None)
         self.api.load_checkpoint = self._real_load
+        self.api.init_database = self._real_init_database
+        self.api.DB_PATH = self._real_db_path
         self._tmpdir.cleanup()
 
-    def test_startup_does_not_load_checkpoint(self) -> None:
-        # TestClient triggers lifespan/startup on construction in setUp.
+    def test_startup_runs_database_init_without_loading_checkpoint(self) -> None:
+        self.assertEqual(
+            self.startup_db_calls["n"],
+            1,
+            "startup() must initialize the database exactly once",
+        )
         self.assertEqual(
             self.load_calls["n"],
             0,
